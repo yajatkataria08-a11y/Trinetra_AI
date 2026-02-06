@@ -1,6 +1,6 @@
 # Trinetra – System & Dependency Requirements
 
-👁️ **Trinetra v1.6.2** is a multimodal IP defense system for image and video similarity detection using CLIP + FAISS.
+  **Trinetra v1.6.2** is a multimodal IP defense system for image and video similarity detection using CLIP + FAISS.
 
 This document defines the **runtime, hardware, and software requirements** needed to run Trinetra reliably.
 
@@ -55,3 +55,4 @@ This document defines the **runtime, hardware, and software requirements** neede
 ### Install (CPU-only)
 ```bash
 pip install torch transformers faiss-cpu numpy opencv-python pillow gradio matplotlib
+
