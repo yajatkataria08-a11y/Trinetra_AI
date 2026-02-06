@@ -1,4 +1,4 @@
-# 👁️ TRINETRA: Multimodal IP Defense System
+#  TRINETRA: Multimodal IP Defense System
 
 **Trinetra** is a forensic intellectual property (IP) protection engine designed to shield digital assets through a dual-layered defense strategy: **DCT-based Forensic Watermarking** and **AI-driven Multimodal Fingerprinting**. 
 
@@ -8,7 +8,7 @@ The system enables creators to register original images and videos into a secure
 
 ---
 
-## 🚀 Key Features
+##  Key Features
 
 ### 1. Forensic DCT Watermarking
 * **Invisible Protection**: Injects a forensic signal into the frequency domain (Y-channel of YUV space) using Discrete Cosine Transform.
@@ -30,7 +30,7 @@ The system enables creators to register original images and videos into a secure
 
 ---
 
-## 🛠️ Technical Architecture
+##  Technical Architecture
 
 * **Frontend**: Gradio (Web Dashboard)
 * **Vector Engine**: FAISS (IndexFlatIP)
@@ -39,9 +39,10 @@ The system enables creators to register original images and videos into a secure
 
 ---
 
-## 📦 Installation
+##  Installation
 
 1. **Clone the repository**:
    ```bash
    git clone https://github.com/yajatkataria08-a11y/Trinetra_AI.git
+
    cd Trinetra_AI
