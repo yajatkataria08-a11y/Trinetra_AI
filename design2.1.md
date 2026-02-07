@@ -35,49 +35,8 @@ allowing reliable similarity search across modalities.
 
 ## 3. High-Level Architecture
 
-┌──────────────┐
-│  User Input  │
-│──────────────│
-│ Text / Image │
-│ Audio        │
-└──────┬───────┘
-       │
-       ▼
-┌──────────────────────┐
-│ Preprocessing Layer  │
-│──────────────────────│
-│ • Language Translation│
-│ • Image Loading       │
-│ • Audio Resampling    │
-└──────┬───────────────┘
-       │
-       ▼
-┌──────────────────────┐
-│ Embedding Models     │
-│──────────────────────│
-│ CLIP  (Image/Text)   │
-│ CLAP  (Audio/Text)   │
-└──────┬───────────────┘
-       │ 512-D vectors
-       ▼
-┌──────────────────────┐
-│ Vector Normalization │
-│ (Unit L2 Norm)       │
-└──────┬───────────────┘
-       │
-       ▼
-┌──────────────────────┐
-│ FAISS Vector Index   │
-│──────────────────────│
-│ IndexFlatIP          │
-│ (Cosine Similarity)  │
-└──────┬───────────────┘
-       │
-       ▼
-┌──────────────────────┐
-│ Ranked Results       │
-│ Similarity Scores    │
-└──────────────────────┘
+<img width="110" height="389" alt="image" src="https://github.com/user-attachments/assets/c28a1703-d9ba-4e1e-9182-7fa04da60e2b" />
+
 
 ---
 
@@ -136,16 +95,7 @@ allowing reliable similarity search across modalities.
 
 ### 4.5 Storage Layout
 
-trinetra_registry/
-├── image/
-│   ├── registry.index
-│   └── id_map.pkl
-├── audio/
-│   ├── registry.index
-│   └── id_map.pkl
-└── storage/
-    ├── asset_001.jpg
-    ├── asset_002.wav
+<img width="111" height="98" alt="image" src="https://github.com/user-attachments/assets/2028d60f-cc34-4bce-81ca-89feb023ef95" />
 
 - Asset IDs are sanitized to prevent path traversal
 - Duplicate asset IDs are rejected
@@ -278,4 +228,5 @@ Future improvements:
 - Confidence calibration
 - API-first deployment
 - Integration with digital signature systems
+
 
