@@ -1,4 +1,4 @@
-# 📋 Trinetra — System Requirements Document
+#  Trinetra — System Requirements Document
 
 ## 1. Purpose
 
@@ -176,3 +176,4 @@ The system will be considered successful if it:
 - Audit trails and usage logs
 - API-based ingestion
 - Integration with digital signature frameworks
+
