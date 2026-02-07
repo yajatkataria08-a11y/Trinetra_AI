@@ -1,4 +1,4 @@
-# 🧠 Trinetra — System Design Document
+#  Trinetra — System Design Document
 
 ## 1. Overview
 
@@ -20,11 +20,11 @@ allowing reliable similarity search across modalities.
 ## 2. Design Goals
 
 ### Primary Goals
-- 🔍 Multimodal search (Image ↔ Text, Audio ↔ Text)
-- 🌐 Cross-lingual support for Indian languages
-- ⚡ Low-latency similarity search
-- 📦 Persistent and auditable asset registry
-- 🧪 Interpretable similarity scoring
+-  Multimodal search (Image ↔ Text, Audio ↔ Text)
+-  Cross-lingual support for Indian languages
+-  Low-latency similarity search
+-  Persistent and auditable asset registry
+-  Interpretable similarity scoring
 
 ### Non-Goals
 - Biometric identification (face or speaker recognition)
@@ -278,3 +278,4 @@ Future improvements:
 - Confidence calibration
 - API-first deployment
 - Integration with digital signature systems
+
