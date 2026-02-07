@@ -35,7 +35,9 @@ The system enables creators to register original images and videos into a secure
 * **Frontend**: Gradio (Web Dashboard)
 * **Vector Engine**: FAISS (IndexFlatIP)
 * **Vision Model**: CLIP (ViT-B/32)
+* **Audio Model**: CLAP (HTSAT)
 * **Processing**: OpenCV, PyTorch, NumPy
+* **Translation**: deep-translator
 
 ---
 
@@ -46,3 +48,4 @@ The system enables creators to register original images and videos into a secure
    git clone https://github.com/yajatkataria08-a11y/Trinetra_AI.git
 
    cd Trinetra_AI
+
