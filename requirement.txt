@@ -1,0 +1,10 @@
+streamlit
+faiss-gpu
+torch
+torchvision
+Pillow
+deep-translator
+transformers
+librosa
+numpy
+soundfile
