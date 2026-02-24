@@ -2035,7 +2035,8 @@ st.markdown("""
     <p>Powered by CLIP &amp; CLAP | Built for Bharat's Digital Future</p>
     <p style='font-size: 0.8em;'>Multimodal embeddings • FAISS indexing • Cross-lingual search</p>
 </div>
-""", unsafe_allow_html=True)
+""", unsafe_allow_html=True)True)
+
 
 
 
