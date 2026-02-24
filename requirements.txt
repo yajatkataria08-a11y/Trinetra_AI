@@ -8,3 +8,6 @@ transformers
 librosa
 numpy
 soundfile
+plotly
+scikit-learn
+pandas
