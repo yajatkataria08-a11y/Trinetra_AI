@@ -20,90 +20,6 @@ from PIL import Image
 from deep_translator import GoogleTranslator
 from transformers import CLIPModel, CLIPProcessor, AutoProcessor, ClapModel
 
-# ==================== AUTHENTICATION ==================== #
-class AuthManager:
-    def __init__(self, db_path=None):
-        if db_path is None:
-            db_path = os.path.join("trinetra_registry", "users.db")
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        self._create_tables()
-        self._create_default_admin()
-    
-    def _create_tables(self):
-        self.conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                username TEXT PRIMARY KEY,
-                password_hash TEXT NOT NULL,
-                role TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                last_login TEXT
-            )
-        """)
-        self.conn.commit()
-    
-    def _create_default_admin(self):
-        """Create default admin account: admin/admin123"""
-        try:
-            admin_hash = hashlib.sha256("admin123".encode()).hexdigest()
-            self.conn.execute("""
-                INSERT INTO users (username, password_hash, role, created_at)
-                VALUES (?, ?, ?, datetime('now'))
-            """, ("admin", admin_hash, "admin"))
-            self.conn.commit()
-        except sqlite3.IntegrityError:
-            pass  # Admin already exists
-    
-    def hash_password(self, password):
-        return hashlib.sha256(password.encode()).hexdigest()
-    
-    def verify_user(self, username, password):
-        pwd_hash = self.hash_password(password)
-        cursor = self.conn.execute("""
-            SELECT username, role FROM users 
-            WHERE username = ? AND password_hash = ?
-        """, (username, pwd_hash))
-        user = cursor.fetchone()
-        
-        if user:
-            # Update last login
-            self.conn.execute("""
-                UPDATE users SET last_login = datetime('now')
-                WHERE username = ?
-            """, (username,))
-            self.conn.commit()
-            return {"username": user[0], "role": user[1]}
-        return None
-    
-    def create_user(self, username, password, role="viewer"):
-        try:
-            pwd_hash = self.hash_password(password)
-            self.conn.execute("""
-                INSERT INTO users (username, password_hash, role, created_at)
-                VALUES (?, ?, ?, datetime('now'))
-            """, (username, pwd_hash, role))
-            self.conn.commit()
-            return True, "User created successfully"
-        except sqlite3.IntegrityError:
-            return False, "Username already exists"
-        except Exception as e:
-            return False, str(e)
-    
-    def get_all_users(self):
-        cursor = self.conn.execute("""
-            SELECT username, role, created_at, last_login FROM users
-        """)
-        return cursor.fetchall()
-
-# ==================== LOGGING ==================== #
-os.makedirs("logs", exist_ok=True)
-logging.basicConfig(
-    filename=f'logs/trinetra_{datetime.now():%Y%m%d}.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('Trinetra')
-
 # ==================== CONFIGURATION ==================== #
 class Config:
     MAX_FILE_SIZE       = 100 * 1024 * 1024
@@ -125,6 +41,124 @@ DEVICE      = "cuda" if torch.cuda.is_available() else "cpu"
 STORAGE_DIR = os.path.join(BASE_DIR, "storage")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 os.makedirs(BASE_DIR,    exist_ok=True)
+
+# ==================== SQLITE CONTEXT MANAGER ==================== #
+class DatabaseConnection:
+    """Thread-safe SQLite connection wrapper"""
+    def __init__(self, db_path):
+        self.db_path = db_path
+        self.local = None
+    
+    def get_connection(self):
+        """Get a thread-local database connection"""
+        if self.local is None:
+            self.local = sqlite3.connect(self.db_path, check_same_thread=True, timeout=10.0)
+        return self.local
+    
+    def execute(self, query, params=None):
+        """Execute a query safely"""
+        conn = self.get_connection()
+        try:
+            cursor = conn.cursor()
+            if params:
+                cursor.execute(query, params)
+            else:
+                cursor.execute(query)
+            conn.commit()
+            return cursor
+        except sqlite3.OperationalError as e:
+            conn.rollback()
+            raise e
+    
+    def fetchall(self, query, params=None):
+        """Execute query and fetch all results"""
+        cursor = self.execute(query, params)
+        return cursor.fetchall()
+    
+    def fetchone(self, query, params=None):
+        """Execute query and fetch one result"""
+        cursor = self.execute(query, params)
+        return cursor.fetchone()
+    
+    def close(self):
+        """Close the connection"""
+        if self.local:
+            self.local.close()
+            self.local = None
+
+# ==================== AUTHENTICATION ==================== #
+class AuthManager:
+    def __init__(self, db_path=None):
+        if db_path is None:
+            db_path = os.path.join("trinetra_registry", "users.db")
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        self.db = DatabaseConnection(db_path)
+        self._create_tables()
+        self._create_default_admin()
+    
+    def _create_tables(self):
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_login TEXT
+            )
+        """)
+    
+    def _create_default_admin(self):
+        """Create default admin account: admin/admin123"""
+        try:
+            admin_hash = hashlib.sha256("admin123".encode()).hexdigest()
+            self.db.execute("""
+                INSERT INTO users (username, password_hash, role, created_at)
+                VALUES (?, ?, ?, datetime('now'))
+            """, ("admin", admin_hash, "admin"))
+        except sqlite3.IntegrityError:
+            pass  # Admin already exists
+    
+    def hash_password(self, password):
+        return hashlib.sha256(password.encode()).hexdigest()
+    
+    def verify_user(self, username, password):
+        pwd_hash = self.hash_password(password)
+        result = self.db.fetchone("""
+            SELECT username, role FROM users 
+            WHERE username = ? AND password_hash = ?
+        """, (username, pwd_hash))
+        
+        if result:
+            self.db.execute("UPDATE users SET last_login = datetime('now') WHERE username = ?", (username,))
+            return {"username": result[0], "role": result[1]}
+        return None
+    
+    def create_user(self, username, password, role="viewer"):
+        try:
+            pwd_hash = self.hash_password(password)
+            self.db.execute("""
+                INSERT INTO users (username, password_hash, role, created_at)
+                VALUES (?, ?, ?, datetime('now'))
+            """, (username, pwd_hash, role))
+            return True, "User created successfully"
+        except sqlite3.IntegrityError:
+            return False, "Username already exists"
+        except Exception as e:
+            return False, str(e)
+    
+    def get_all_users(self):
+        return self.db.fetchall("""
+            SELECT username, role, created_at, last_login FROM users
+        """)
+
+# ==================== LOGGING ==================== #
+os.makedirs("logs", exist_ok=True)
+logging.basicConfig(
+    filename=f'logs/trinetra_{datetime.now():%Y%m%d}.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('Trinetra')
 
 # ==================== PAGE CONFIG ==================== #
 st.set_page_config(
@@ -324,11 +358,11 @@ class MetadataDB:
     def __init__(self, db_path=None):
         if db_path is None:
             db_path = os.path.join(BASE_DIR, "metadata.db")
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.db = DatabaseConnection(db_path)
         self._create_tables()
 
     def _create_tables(self):
-        self.conn.execute("""
+        self.db.execute("""
             CREATE TABLE IF NOT EXISTS assets (
                 id TEXT PRIMARY KEY, modality TEXT NOT NULL, language TEXT NOT NULL,
                 file_path TEXT NOT NULL, file_size INTEGER, upload_date TEXT NOT NULL,
@@ -337,7 +371,7 @@ class MetadataDB:
                 UNIQUE(id)
             )
         """)
-        self.conn.execute("""
+        self.db.execute("""
             CREATE TABLE IF NOT EXISTS comments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 asset_id TEXT NOT NULL, user TEXT NOT NULL,
@@ -345,27 +379,25 @@ class MetadataDB:
                 FOREIGN KEY (asset_id) REFERENCES assets(id)
             )
         """)
-        self.conn.execute("""
+        self.db.execute("""
             CREATE TABLE IF NOT EXISTS ratings (
                 asset_id TEXT NOT NULL, user TEXT NOT NULL,
                 rating INTEGER NOT NULL, PRIMARY KEY (asset_id, user),
                 FOREIGN KEY (asset_id) REFERENCES assets(id)
             )
         """)
-        self.conn.commit()
 
     def add_asset(self, asset_id, modality, language, file_path, file_size,
                   faiss_idx, tags=None, description="", collection="", 
                   quality_score=None, uploaded_by="unknown"):
         try:
-            self.conn.execute("""
+            self.db.execute("""
                 INSERT INTO assets
                 (id, modality, language, file_path, file_size, upload_date,
                  faiss_index, tags, description, collection, quality_score, uploaded_by)
                 VALUES (?, ?, ?, ?, ?, datetime('now'), ?, ?, ?, ?, ?, ?)
             """, (asset_id, modality, language, file_path, file_size,
                   faiss_idx, json.dumps(tags or []), description, collection, quality_score, uploaded_by))
-            self.conn.commit()
         except sqlite3.IntegrityError:
             pass
 
@@ -378,86 +410,79 @@ class MetadataDB:
         if date_from:  query += " AND upload_date >= ?";         params.append(date_from)
         if tags:       query += " AND tags LIKE ?";              params.append(f'%{tags}%')
         if collection: query += " AND collection = ?";           params.append(collection)
-        return self.conn.execute(query, params).fetchall()
+        return self.db.fetchall(query, params)
 
     def get_all_tags(self):
-        cursor  = self.conn.execute("SELECT DISTINCT tags FROM assets WHERE tags != '[]'")
+        result = self.db.fetchall("SELECT DISTINCT tags FROM assets WHERE tags != '[]'")
         all_tags = set()
-        for row in cursor:
+        for row in result:
             all_tags.update(json.loads(row[0]))
         return sorted(list(all_tags))
 
     def get_all_collections(self):
-        cursor = self.conn.execute("SELECT DISTINCT collection FROM assets WHERE collection != ''")
-        return [row[0] for row in cursor]
+        result = self.db.fetchall("SELECT DISTINCT collection FROM assets WHERE collection != ''")
+        return [row[0] for row in result]
     
     def add_comment(self, asset_id, user, comment):
-        self.conn.execute("""
+        self.db.execute("""
             INSERT INTO comments (asset_id, user, comment, timestamp)
             VALUES (?, ?, ?, datetime('now'))
         """, (asset_id, user, comment))
-        self.conn.commit()
     
     def get_comments(self, asset_id):
-        cursor = self.conn.execute("""
+        return self.db.fetchall("""
             SELECT user, comment, timestamp FROM comments
             WHERE asset_id = ? ORDER BY timestamp DESC
         """, (asset_id,))
-        return cursor.fetchall()
     
     def add_rating(self, asset_id, user, rating):
-        self.conn.execute("""
+        self.db.execute("""
             INSERT OR REPLACE INTO ratings (asset_id, user, rating)
             VALUES (?, ?, ?)
         """, (asset_id, user, rating))
-        self.conn.commit()
     
     def get_rating(self, asset_id):
-        cursor = self.conn.execute("""
+        result = self.db.fetchone("""
             SELECT AVG(rating), COUNT(*) FROM ratings WHERE asset_id = ?
         """, (asset_id,))
-        result = cursor.fetchone()
         return result if result[0] else (0, 0)
-
 
 # ==================== ANALYTICS ==================== #
 class AnalyticsTracker:
     def __init__(self, db_path=None):
         if db_path is None:
             db_path = os.path.join(BASE_DIR, "analytics.db")
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        self.db = DatabaseConnection(db_path)
         self._create_tables()
 
     def _create_tables(self):
-        self.conn.execute("""
+        self.db.execute("""
             CREATE TABLE IF NOT EXISTS searches (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 query_text TEXT, modality TEXT, results_count INTEGER,
                 timestamp TEXT, search_duration_ms REAL, user TEXT
             )
         """)
-        self.conn.commit()
 
     def log_search(self, query, modality, results_count, duration_ms, user="unknown"):
         try:
-            self.conn.execute("""
+            self.db.execute("""
                 INSERT INTO searches (query_text, modality, results_count, timestamp, search_duration_ms, user)
                 VALUES (?, ?, ?, datetime('now'), ?, ?)
             """, (query, modality, results_count, duration_ms, user))
-            self.conn.commit()
         except Exception:
             pass
 
     def get_stats(self, days=7):
-        cursor = self.conn.execute(f"""
+        result = self.db.fetchone(f"""
             SELECT COUNT(*), AVG(results_count), AVG(search_duration_ms)
             FROM searches
             WHERE timestamp >= datetime('now', '-{days} days')
         """)
-        return cursor.fetchone()
+        return result
     
     def get_popular_searches(self, limit=10):
-        cursor = self.conn.execute("""
+        return self.db.fetchall("""
             SELECT query_text, COUNT(*) as freq
             FROM searches
             WHERE timestamp >= datetime('now', '-30 days')
@@ -465,8 +490,6 @@ class AnalyticsTracker:
             ORDER BY freq DESC
             LIMIT ?
         """, (limit,))
-        return cursor.fetchall()
-
 
 # ==================== MODELS ==================== #
 @st.cache_resource(show_spinner="Loading neural models...")
@@ -540,7 +563,6 @@ def analyze_image_quality(file_path):
     try:
         img = Image.open(file_path)
         quality_score = min(img.width * img.height / (1920 * 1080), 1.0)
-        
         return {
             "resolution": f"{img.width}×{img.height}",
             "quality_score": quality_score,
@@ -556,7 +578,6 @@ def analyze_audio_quality(file_path):
     try:
         y, sr = librosa.load(file_path, sr=None)
         rms = librosa.feature.rms(y=y)[0]
-        
         return {
             "duration": f"{len(y) / sr:.1f}s",
             "sample_rate": f"{sr}Hz",
@@ -572,7 +593,7 @@ def get_search_suggestions(analytics, query, limit=5):
         popular = analytics.get_popular_searches(limit)
         return [p[0] for p in popular]
     
-    cursor = analytics.conn.execute("""
+    result = analytics.db.fetchall("""
         SELECT DISTINCT query_text, COUNT(*) as freq
         FROM searches
         WHERE query_text LIKE ? AND query_text != ?
@@ -581,7 +602,7 @@ def get_search_suggestions(analytics, query, limit=5):
         LIMIT ?
     """, (f"%{query}%", query, limit))
     
-    return [row[0] for row in cursor.fetchall()]
+    return [row[0] for row in result]
 
 # ==================== ENGINE ==================== #
 class TrinetraEngine:
@@ -1388,4 +1409,81 @@ st.markdown("""
     <p>Powered by CLIP & CLAP | Built for Bharat's Digital Future</p>
     <p style='font-size: 0.8em;'>Multimodal embeddings • FAISS indexing • Cross-lingual search</p>
 </div>
+""", unsafe_allow_html=True)
+        
+        # Create new user
+        with st.expander("Create New User"):
+            new_user = st.text_input("Username", key="new_user")
+            new_pass = st.text_input("Password", type="password", key="new_pass")
+            new_role = st.selectbox("Role", ["viewer", "uploader", "admin"], key="new_role")
+            
+            if st.button("Create User"):
+                if new_user and new_pass:
+                    ok, msg = auth_manager.create_user(new_user, new_pass, new_role)
+                    (st.success if ok else st.error)(msg)
+                else:
+                    st.warning("Please provide username and password")
+        
+        # List users
+        st.markdown("#### Current Users")
+        users = auth_manager.get_all_users()
+        df_users = pd.DataFrame(users, columns=["Username", "Role", "Created", "Last Login"])
+        st.dataframe(df_users, use_container_width=True, hide_index=True)
+        
+        st.markdown("---")
+        st.markdown("### System Statistics")
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Assets", total)
+        col2.metric("Total Searches", stats[0] if stats else 0)
+        col3.metric("Total Users", len(users))
+        
+        # Popular searches
+        st.markdown("#### Popular Searches (30 days)")
+        popular = analytics.get_popular_searches(10)
+        if popular:
+            df_pop = pd.DataFrame(popular, columns=["Query", "Frequency"])
+            st.dataframe(df_pop, use_container_width=True, hide_index=True)
+
+# ── Comparison View ── #
+if len(st.session_state.last_search_results) >= 2:
+    with st.expander("Compare Results"):
+        st.markdown("### Side-by-Side Comparison")
+        ids = [r["id"] for r in st.session_state.last_search_results]
+        ca, cb = st.columns(2)
+        s1 = ca.selectbox("Result 1", ids, key="cmp1")
+        s2 = cb.selectbox("Result 2", ids, key="cmp2")
+        r1 = next(r for r in st.session_state.last_search_results if r["id"] == s1)
+        r2 = next(r for r in st.session_state.last_search_results if r["id"] == s2)
+        ca, cb = st.columns(2)
+        with ca:
+            if r1.get("modality") == "image":
+                st.image(r1["path"], use_container_width=True)
+            else:
+                st.audio(r1["path"])
+            st.metric("Score", f"{r1['score']:.2%}")
+            st.write(f"**ID:** {r1['id']}")
+            st.write(f"**Lang:** {r1.get('lang', '—')}")
+            if 'quality' in r1:
+                st.write(f"**Quality:** {r1['quality']:.1%}")
+        with cb:
+            if r2.get("modality") == "image":
+                st.image(r2["path"], use_container_width=True)
+            else:
+                st.audio(r2["path"])
+            st.metric("Score", f"{r2['score']:.2%}")
+            st.write(f"**ID:** {r2['id']}")
+            st.write(f"**Lang:** {r2.get('lang', '—')}")
+            if 'quality' in r2:
+                st.write(f"**Quality:** {r2['quality']:.1%}")
+
+# Footer
+st.markdown("---")
+st.markdown("""
+<div style='text-align: center; color: #666; padding: 20px;'>
+    <p><strong style='font-size: 1.1em; color: #667eea;'>Created by Team Human</strong></p>
+    <p>Powered by CLIP & CLAP | Built for Bharat's Digital Future</p>
+    <p style='font-size: 0.8em;'>Multimodal embeddings • FAISS indexing • Cross-lingual search</p>
+</div>
+
 """, unsafe_allow_html=True)
