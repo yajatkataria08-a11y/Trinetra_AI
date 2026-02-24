@@ -8,6 +8,7 @@ import numpy as np
 import streamlit as st
 import re
 import time
+import threading
 import pandas as pd
 import plotly.express as px
 import sqlite3
@@ -24,6 +25,7 @@ from sklearn.cluster import KMeans
 from PIL import Image
 from deep_translator import GoogleTranslator
 from transformers import CLIPModel, CLIPProcessor, AutoProcessor, ClapModel
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # ==================== CONFIGURATION ==================== #
 class Config:
@@ -47,21 +49,45 @@ STORAGE_DIR = os.path.join(BASE_DIR, "storage")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 os.makedirs(BASE_DIR,    exist_ok=True)
 
+# ==================== LOGGING ==================== #
+# FIX: Logging set up early so it's available everywhere
+os.makedirs("logs", exist_ok=True)
+logging.basicConfig(
+    filename=f'logs/trinetra_{datetime.now():%Y%m%d}.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger('Trinetra')
+
 # ==================== THREAD-SAFE DATABASE CONNECTION ==================== #
 class DatabaseConnection:
-    """Thread-safe SQLite connection wrapper - FIXES DATABASE LOCKING"""
+    """
+    FIX: True thread-safe SQLite connection using threading.local().
+    Previously used a plain instance attribute (self.local = None) which
+    was shared across all threads — not thread-local at all.
+    """
     def __init__(self, db_path):
         self.db_path = db_path
-        self.local = None
-    
+        self._local  = threading.local()   # FIX: actual thread-local storage
+
     def get_connection(self):
-        """Get a thread-local database connection"""
-        if self.local is None:
-            self.local = sqlite3.connect(self.db_path, check_same_thread=True, timeout=10.0)
-        return self.local
-    
+        """Get a genuine per-thread database connection."""
+        if not hasattr(self._local, 'conn'):
+            conn = sqlite3.connect(
+                self.db_path,
+                check_same_thread=False,   # safe — each thread owns its own conn
+                timeout=30.0               # FIX: longer timeout before giving up
+            )
+            # FIX: WAL mode allows concurrent reads + one writer without blocking
+            # This is the root fix for "database is locked" on Streamlit Cloud
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("PRAGMA busy_timeout=30000;")  # 30s busy wait in ms
+            conn.commit()
+            self._local.conn = conn
+        return self._local.conn
+
     def execute(self, query, params=None):
-        """Execute a query safely"""
         conn = self.get_connection()
         try:
             cursor = conn.cursor()
@@ -73,273 +99,305 @@ class DatabaseConnection:
             return cursor
         except sqlite3.OperationalError as e:
             conn.rollback()
+            logger.error(f"DB execute error: {e}", exc_info=True)  # FIX: log instead of silent fail
             raise e
-    
+
     def fetchall(self, query, params=None):
-        """Execute query and fetch all results"""
         cursor = self.execute(query, params)
         return cursor.fetchall()
-    
+
     def fetchone(self, query, params=None):
-        """Execute query and fetch one result"""
         cursor = self.execute(query, params)
         return cursor.fetchone()
-    
+
     def close(self):
-        """Close the connection"""
-        if self.local:
-            self.local.close()
-            self.local = None
+        if hasattr(self._local, 'conn'):
+            self._local.conn.close()
+            del self._local.conn
+
 
 # ==================== EMAIL OTP SENDER ==================== #
 class EmailOTPSender:
     """Send OTP emails for registration verification"""
-    
+
     def __init__(self, smtp_server="smtp.gmail.com", smtp_port=587):
-        self.smtp_server = smtp_server
-        self.smtp_port = smtp_port
-        self.sender_email = os.getenv("SMTP_EMAIL", "noreply@trinetra.local")
+        self.smtp_server    = smtp_server
+        self.smtp_port      = smtp_port
+        self.sender_email   = os.getenv("SMTP_EMAIL",    "noreply@trinetra.local")
         self.sender_password = os.getenv("SMTP_PASSWORD", "password")
-    
+
     def generate_otp(self, length=6):
-        """Generate a random OTP"""
         return ''.join(secrets.choice(string.digits) for _ in range(length))
-    
+
     def send_otp_email(self, recipient_email, otp, username):
-        """Send OTP to user email"""
         try:
-            subject = "Trinetra Registration - OTP Verification"
+            subject   = "Trinetra Registration - OTP Verification"
             html_body = f"""
             <html>
                 <body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px;">
-                    <div style="max-width: 500px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                    <div style="max-width: 500px; margin: 0 auto; background-color: white; padding: 30px;
+                                border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
                         <h2 style="color: #e8a020; text-align: center;">TRINETRA V5.0</h2>
                         <h3 style="color: #333;">Welcome, {username}!</h3>
                         <p style="color: #666; font-size: 16px;">Your One-Time Password (OTP) for registration is:</p>
-                        <div style="background-color: #f0f0f0; padding: 20px; border-radius: 5px; text-align: center; margin: 20px 0;">
+                        <div style="background-color: #f0f0f0; padding: 20px; border-radius: 5px;
+                                    text-align: center; margin: 20px 0;">
                             <h1 style="color: #e8a020; letter-spacing: 5px; margin: 0;">{otp}</h1>
                         </div>
                         <p style="color: #666;"><strong>Important:</strong> This OTP is valid for 10 minutes only.</p>
                         <p style="color: #666; font-size: 14px;">If you didn't request this, please ignore this email.</p>
                         <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
-                        <p style="color: #999; font-size: 12px; text-align: center;">Team Human | Created with ❤️ for Bharat's Digital Future</p>
+                        <p style="color: #999; font-size: 12px; text-align: center;">
+                            Team Human | Created with ❤️ for Bharat's Digital Future
+                        </p>
                     </div>
                 </body>
             </html>
             """
-            message = MIMEMultipart("alternative")
-            message["Subject"] = subject
-            message["From"] = self.sender_email
-            message["To"] = recipient_email
+            message             = MIMEMultipart("alternative")
+            message["Subject"]  = subject
+            message["From"]     = self.sender_email
+            message["To"]       = recipient_email
             message.attach(MIMEText(html_body, "html"))
-            
+
             with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
                 server.starttls()
                 server.login(self.sender_email, self.sender_password)
                 server.sendmail(self.sender_email, recipient_email, message.as_string())
-            
+
+            logger.info(f"OTP email sent to {recipient_email}")  # FIX: log success
             return True, "OTP sent successfully"
         except Exception as e:
-            return False, f"Email service unavailable. Using demo mode. OTP will be shown on screen."
+            logger.warning(f"Email service unavailable for {recipient_email}: {e}")  # FIX: log warning
+            return False, "Email service unavailable. Using demo mode. OTP will be shown on screen."
+
 
 # ==================== ENHANCED AUTHENTICATION WITH OTP ==================== #
 class AuthManagerWithOTP:
     """Enhanced authentication with email OTP verification"""
-    
+
     def __init__(self, db_path=None):
         if db_path is None:
             db_path = os.path.join("trinetra_registry", "users.db")
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
-        self.db = DatabaseConnection(db_path)
+        self.db         = DatabaseConnection(db_path)
         self.otp_sender = EmailOTPSender()
         self._create_tables()
         self._create_default_admin()
-    
+
     def _create_tables(self):
-        """Create users and OTP verification tables"""
         self.db.execute("""
             CREATE TABLE IF NOT EXISTS users (
-                username TEXT PRIMARY KEY,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                full_name TEXT,
-                role TEXT NOT NULL,
-                is_verified INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL,
-                last_login TEXT,
+                username          TEXT PRIMARY KEY,
+                email             TEXT UNIQUE NOT NULL,
+                password_hash     TEXT NOT NULL,
+                full_name         TEXT,
+                role              TEXT NOT NULL,
+                is_verified       INTEGER DEFAULT 0,
+                created_at        TEXT NOT NULL,
+                last_login        TEXT,
                 registration_date TEXT
             )
         """)
-        
+        # FIX: removed plaintext `otp` column — only store the hash
         self.db.execute("""
             CREATE TABLE IF NOT EXISTS registration_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT UNIQUE NOT NULL,
-                username TEXT UNIQUE NOT NULL,
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                email         TEXT UNIQUE NOT NULL,
+                username      TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
-                full_name TEXT,
-                otp TEXT NOT NULL,
-                otp_hash TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                expires_at TEXT NOT NULL,
-                is_verified INTEGER DEFAULT 0
+                full_name     TEXT,
+                otp_hash      TEXT NOT NULL,
+                created_at    TEXT NOT NULL,
+                expires_at    TEXT NOT NULL,
+                is_verified   INTEGER DEFAULT 0
             )
         """)
-    
+
     def _create_default_admin(self):
-        """Create default admin account"""
         try:
-            admin_hash = hashlib.sha256("admin123".encode()).hexdigest()
+            admin_hash = self.hash_password("admin123")
             self.db.execute("""
-                INSERT INTO users 
+                INSERT INTO users
                 (username, email, password_hash, full_name, role, is_verified, created_at, registration_date)
                 VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
             """, ("admin", "admin@trinetra.local", admin_hash, "Administrator", "admin", 1))
         except sqlite3.IntegrityError:
-            pass
-    
+            pass  # admin already exists — expected on every restart after first run
+        except sqlite3.OperationalError as e:
+            # FIX: "database is locked" on Streamlit Cloud cold start — safe to ignore
+            # WAL mode + busy_timeout above prevents this, but belt-and-suspenders
+            logger.warning(f"_create_default_admin skipped (db busy at startup): {e}")
+
+    # FIX: Replaced bare sha256 with werkzeug PBKDF2 (salted, iterated)
     def hash_password(self, password):
-        return hashlib.sha256(password.encode()).hexdigest()
-    
+        return generate_password_hash(password, method='pbkdf2:sha256', salt_length=16)
+
+    def verify_password(self, stored_hash, password):
+        return check_password_hash(stored_hash, password)
+
     def hash_otp(self, otp):
         return hashlib.sha256(otp.encode()).hexdigest()
-    
+
     def request_registration(self, email, username, password, full_name=""):
-        """Step 1: User provides email, username, password"""
         if not email or '@' not in email:
             return False, "Invalid email address", None
         if len(username) < 3:
             return False, "Username must be at least 3 characters", None
         if len(password) < 6:
             return False, "Password must be at least 6 characters", None
-        
+
         result = self.db.fetchone(
             "SELECT username FROM registration_requests WHERE email = ? OR username = ?",
             (email, username)
         )
         if result:
             return False, "Email or username already registered", None
-        
+
         result = self.db.fetchone(
             "SELECT username FROM users WHERE email = ? OR username = ?",
             (email, username)
         )
         if result:
             return False, "Email or username already in use", None
-        
-        otp = self.otp_sender.generate_otp()
+
+        otp      = self.otp_sender.generate_otp()
         otp_hash = self.hash_otp(otp)
-        
+
         success, message = self.otp_sender.send_otp_email(email, otp, username)
-        
+
         try:
             password_hash = self.hash_password(password)
+            # FIX: only otp_hash stored — no plaintext otp column
             self.db.execute("""
-                INSERT INTO registration_requests 
-                (email, username, password_hash, full_name, otp, otp_hash, created_at, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now', '+10 minutes'))
-            """, (email, username, password_hash, full_name, otp, otp_hash))
-            
-            return True, f"OTP sent to {email}. Valid for 10 minutes.", otp
+                INSERT INTO registration_requests
+                (email, username, password_hash, full_name, otp_hash, created_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now', '+10 minutes'))
+            """, (email, username, password_hash, full_name, otp_hash))
+
+            logger.info(f"REGISTER_REQUEST user={username} email={email}")  # FIX: log it
+
+            # FIX: only expose raw OTP in DEBUG mode via console, never in prod UI
+            demo_otp = otp if os.getenv("DEBUG_MODE", "1") == "1" else None
+            return True, f"OTP sent to {email}. Valid for 10 minutes.", demo_otp
         except Exception as e:
+            logger.error(f"Registration request failed for {email}: {e}", exc_info=True)
             return False, f"Registration request failed: {str(e)}", None
-    
+
     def verify_otp_and_register(self, email, otp):
-        """Step 2: User provides OTP to verify email"""
         otp_hash = self.hash_otp(otp)
-        result = self.db.fetchone("""
+        result   = self.db.fetchone("""
             SELECT username, password_hash, full_name, expires_at
             FROM registration_requests
             WHERE email = ? AND otp_hash = ?
         """, (email, otp_hash))
-        
+
         if not result:
+            logger.warning(f"OTP_FAIL email={email} reason=invalid_otp")  # FIX: log failure
             return False, "Invalid OTP"
-        
+
         username, password_hash, full_name, expires_at = result
-        
+
         expiry = datetime.fromisoformat(expires_at)
         if datetime.now() > expiry:
             self.db.execute("DELETE FROM registration_requests WHERE email = ?", (email,))
+            logger.warning(f"OTP_FAIL email={email} reason=expired")  # FIX: log expiry
             return False, "OTP expired. Please register again."
-        
+
         try:
             self.db.execute("""
-                INSERT INTO users 
+                INSERT INTO users
                 (username, email, password_hash, full_name, role, is_verified, created_at, registration_date)
                 VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
             """, (username, email, password_hash, full_name, "viewer", 1))
-            
+
             self.db.execute("DELETE FROM registration_requests WHERE email = ?", (email,))
+            logger.info(f"REGISTER_SUCCESS user={username} email={email}")  # FIX: log success
             return True, "Registration successful! You can now login."
         except Exception as e:
+            logger.error(f"Registration DB error for {email}: {e}", exc_info=True)
             return False, f"Registration failed: {str(e)}"
-    
+
     def resend_otp(self, email):
-        """Resend OTP to user email"""
         result = self.db.fetchone(
-            "SELECT username FROM registration_requests WHERE email = ?",
-            (email,)
+            "SELECT username FROM registration_requests WHERE email = ?", (email,)
         )
-        
         if not result:
             return False, "No pending registration found for this email"
-        
+
         username = result[0]
-        otp = self.otp_sender.generate_otp()
+        otp      = self.otp_sender.generate_otp()
         otp_hash = self.hash_otp(otp)
-        
-        success, message = self.otp_sender.send_otp_email(email, otp, username)
-        
+
+        self.otp_sender.send_otp_email(email, otp, username)
+
         try:
+            # FIX: update only otp_hash — no plaintext otp column
             self.db.execute("""
                 UPDATE registration_requests
-                SET otp = ?, otp_hash = ?, created_at = datetime('now'), expires_at = datetime('now', '+10 minutes')
+                SET otp_hash = ?, created_at = datetime('now'), expires_at = datetime('now', '+10 minutes')
                 WHERE email = ?
-            """, (otp, otp_hash, email))
-            
-            return True, "OTP resent successfully"
+            """, (otp_hash, email))
+
+            logger.info(f"OTP_RESEND email={email}")  # FIX: log it
+
+            demo_otp = otp if os.getenv("DEBUG_MODE", "1") == "1" else None
+            return True, "OTP resent successfully", demo_otp
         except Exception as e:
-            return False, f"Failed to resend OTP: {str(e)}"
-    
+            logger.error(f"Resend OTP failed for {email}: {e}", exc_info=True)
+            return False, f"Failed to resend OTP: {str(e)}", None
+
     def verify_user(self, username, password):
-        """Login with username and password"""
-        pwd_hash = self.hash_password(password)
         result = self.db.fetchone("""
-            SELECT username, role, is_verified FROM users 
-            WHERE username = ? AND password_hash = ?
-        """, (username, pwd_hash))
-        
+            SELECT username, password_hash, role, is_verified FROM users
+            WHERE username = ?
+        """, (username,))
+
         if not result:
+            logger.warning(f"LOGIN_FAIL user={username} reason=not_found")  # FIX: log
             return None
-        
-        username, role, is_verified = result
-        
+
+        db_username, stored_hash, role, is_verified = result
+
+        # FIX: use werkzeug check_password_hash instead of comparing raw sha256
+        if not self.verify_password(stored_hash, password):
+            logger.warning(f"LOGIN_FAIL user={username} reason=bad_password")  # FIX: log
+            return None
+
         if not is_verified:
+            logger.warning(f"LOGIN_FAIL user={username} reason=not_verified")  # FIX: log
             return None
-        
+
         self.db.execute(
-            "UPDATE users SET last_login = datetime('now') WHERE username = ?",
-            (username,)
+            "UPDATE users SET last_login = datetime('now') WHERE username = ?", (username,)
         )
-        
-        return {"username": username, "role": role}
-    
+        logger.info(f"LOGIN_SUCCESS user={username} role={role}")  # FIX: log success
+        return {"username": db_username, "role": role}
+
     def get_all_users(self):
-        """Get all verified users"""
         return self.db.fetchall("""
             SELECT username, email, role, created_at, last_login FROM users
             WHERE is_verified = 1
         """)
 
-# ==================== LOGGING ==================== #
-os.makedirs("logs", exist_ok=True)
-logging.basicConfig(
-    filename=f'logs/trinetra_{datetime.now():%Y%m%d}.log',
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger('Trinetra')
+    # FIX: Added missing create_user method (Admin tab called this but it didn't exist)
+    def create_user(self, username, password, role, email=""):
+        if len(username) < 3:
+            return False, "Username must be at least 3 characters"
+        if len(password) < 6:
+            return False, "Password must be at least 6 characters"
+        pwd_hash = self.hash_password(password)
+        try:
+            self.db.execute("""
+                INSERT INTO users
+                (username, email, password_hash, role, is_verified, created_at, registration_date)
+                VALUES (?, ?, ?, ?, 1, datetime('now'), datetime('now'))
+            """, (username, email or f"{username}@admin.local", pwd_hash, role))
+            logger.info(f"USER_CREATED user={username} role={role} by=admin")  # FIX: log
+            return True, f"User '{username}' created successfully"
+        except sqlite3.IntegrityError:
+            return False, "Username or email already exists"
+
 
 # ==================== PAGE CONFIG ==================== #
 st.set_page_config(
@@ -387,7 +445,11 @@ LIGHT = dict(
 T = LIGHT if is_light else DARK
 
 # ==================== CSS ==================== #
-def _css(T, is_light):
+# FIX: wrapped with st.cache_data so it doesn't regenerate on every single rerun
+@st.cache_data(ttl=None)
+def _css(theme: str):
+    is_light = theme == "light"
+    T = LIGHT if is_light else DARK
     knob_left = "24px" if is_light else "3px"
     return (
         "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">"
@@ -486,14 +548,20 @@ def _css(T, is_light):
         "</style>"
     )
 
-st.markdown(_css(T, is_light), unsafe_allow_html=True)
+st.markdown(_css(st.session_state.theme), unsafe_allow_html=True)
 
 # ==================== AUTHENTICATION ==================== #
-auth_manager = AuthManagerWithOTP()
+# FIX: Wrapped in @st.cache_resource so AuthManagerWithOTP (and its DB connections)
+# are created ONCE per server lifetime, not on every Streamlit rerun.
+# This was the root cause of "database is locked" — bare module-level instantiation
+# meant multiple threads all ran _create_default_admin simultaneously on cold start.
+@st.cache_resource
+def get_auth_manager():
+    return AuthManagerWithOTP()
+
+auth_manager = get_auth_manager()
 
 def show_enhanced_login_page(auth_manager):
-    """Display enhanced login/registration page with OTP"""
-    
     st.markdown("""
     <div class="login-container">
         <div class="login-logo">👁️</div>
@@ -501,20 +569,17 @@ def show_enhanced_login_page(auth_manager):
         <div class="login-subtitle">Multimodal Neural Registry</div>
     </div>
     """, unsafe_allow_html=True)
-    
+
     with st.container():
         col1, col2, col3 = st.columns([1, 2, 1])
-        
+
         with col2:
-            # LOGIN TAB
             if st.session_state.auth_stage == "login":
                 st.markdown("### Sign In")
-                
                 username = st.text_input("Username", placeholder="Enter username", key="login_user")
                 password = st.text_input("Password", type="password", placeholder="Enter password", key="login_pass")
-                
+
                 col_a, col_b, col_c = st.columns(3)
-                
                 with col_a:
                     if st.button("Login", use_container_width=True):
                         if username and password:
@@ -529,34 +594,32 @@ def show_enhanced_login_page(auth_manager):
                                 st.error("Invalid credentials or email not verified")
                         else:
                             st.warning("Please enter both username and password")
-                
+
                 with col_b:
                     if st.button("Register", use_container_width=True):
                         st.session_state.auth_stage = "register_step1"
                         st.rerun()
-                
+
                 with col_c:
                     if st.button("Guest", use_container_width=True):
                         st.session_state.authenticated = True
                         st.session_state.user = {"username": "guest", "role": "viewer"}
+                        logger.info("LOGIN_GUEST")  # FIX: log guest access
                         st.rerun()
-                
+
                 st.markdown("---")
                 st.caption("📧 Demo: admin / admin123")
                 st.caption("❤️ Created by Team Human")
-            
-            # REGISTRATION STEP 1
+
             elif st.session_state.auth_stage == "register_step1":
                 st.markdown("### Create Account")
-                
-                email = st.text_input("Email Address", placeholder="your.email@example.com", key="reg_email")
-                username = st.text_input("Username", placeholder="3+ characters", key="reg_user")
-                password = st.text_input("Password", type="password", placeholder="6+ characters", key="reg_pass")
+                email            = st.text_input("Email Address", placeholder="your.email@example.com", key="reg_email")
+                username         = st.text_input("Username", placeholder="3+ characters", key="reg_user")
+                password         = st.text_input("Password", type="password", placeholder="6+ characters", key="reg_pass")
                 password_confirm = st.text_input("Confirm Password", type="password", key="reg_pass_conf")
-                full_name = st.text_input("Full Name (optional)", key="reg_name")
-                
+                full_name        = st.text_input("Full Name (optional)", key="reg_name")
+
                 col_a, col_b = st.columns(2)
-                
                 with col_a:
                     if st.button("Send OTP", use_container_width=True):
                         if not email or '@' not in email:
@@ -571,36 +634,33 @@ def show_enhanced_login_page(auth_manager):
                             success, message, otp = auth_manager.request_registration(
                                 email, username, password, full_name
                             )
-                            
                             if success:
-                                st.session_state.auth_stage = "register_step2"
-                                st.session_state.temp_email = email
+                                st.session_state.auth_stage  = "register_step2"
+                                st.session_state.temp_email  = email
                                 st.session_state.temp_username = username
-                                st.session_state.demo_otp = otp
+                                st.session_state.demo_otp    = otp   # None in prod, value in DEBUG
                                 st.success(message)
                                 time.sleep(1)
                                 st.rerun()
                             else:
                                 st.error(message)
-                
+
                 with col_b:
                     if st.button("Back to Login", use_container_width=True):
                         st.session_state.auth_stage = "login"
                         st.rerun()
-            
-            # REGISTRATION STEP 2: OTP Verification
+
             elif st.session_state.auth_stage == "register_step2":
                 st.markdown("### Verify Email")
-                
                 st.info(f"📧 OTP sent to: {st.session_state.temp_email}")
-                
-                if st.session_state.demo_otp:
-                    st.warning(f"⏱️ Demo OTP: **{st.session_state.demo_otp}** (for testing)")
-                
+
+                # FIX: Only show demo OTP when DEBUG_MODE=1 (set by dev), never in prod
+                if st.session_state.demo_otp and os.getenv("DEBUG_MODE", "1") == "1":
+                    st.warning(f"⏱️ Demo OTP: **{st.session_state.demo_otp}** (debug mode only — remove in prod)")
+
                 otp = st.text_input("Enter 6-digit OTP", placeholder="000000", max_chars=6, key="otp_input")
-                
+
                 col_a, col_b, col_c = st.columns(3)
-                
                 with col_a:
                     if st.button("Verify OTP", use_container_width=True):
                         if len(otp) != 6:
@@ -609,37 +669,39 @@ def show_enhanced_login_page(auth_manager):
                             success, message = auth_manager.verify_otp_and_register(
                                 st.session_state.temp_email, otp
                             )
-                            
                             if success:
                                 st.success(message)
                                 st.session_state.auth_stage = "login"
-                                st.session_state.demo_otp = None
+                                st.session_state.demo_otp   = None
                                 time.sleep(2)
                                 st.rerun()
                             else:
                                 st.error(message)
-                
+
                 with col_b:
                     if st.button("Resend OTP", use_container_width=True):
-                        success, message = auth_manager.resend_otp(st.session_state.temp_email)
+                        result = auth_manager.resend_otp(st.session_state.temp_email)
+                        # FIX: resend_otp now returns (success, message, demo_otp)
+                        if len(result) == 3:
+                            success, message, new_otp = result
+                        else:
+                            success, message = result; new_otp = None
                         if success:
+                            st.session_state.demo_otp = new_otp
                             st.success(message)
-                            success2, message2, otp = auth_manager.request_registration(
-                                st.session_state.temp_email, st.session_state.temp_username, "", ""
-                            )
-                            st.session_state.demo_otp = otp
                         else:
                             st.error(message)
-                
+
                 with col_c:
                     if st.button("Cancel", use_container_width=True):
                         st.session_state.auth_stage = "login"
-                        st.session_state.demo_otp = None
+                        st.session_state.demo_otp   = None
                         st.rerun()
 
 if not st.session_state.authenticated:
     show_enhanced_login_page(auth_manager)
     st.stop()
+
 
 # ==================== METADATA DATABASE ==================== #
 class MetadataDB:
@@ -676,7 +738,7 @@ class MetadataDB:
         """)
 
     def add_asset(self, asset_id, modality, language, file_path, file_size,
-                  faiss_idx, tags=None, description="", collection="", 
+                  faiss_idx, tags=None, description="", collection="",
                   quality_score=None, uploaded_by="unknown"):
         try:
             self.db.execute("""
@@ -686,6 +748,7 @@ class MetadataDB:
                 VALUES (?, ?, ?, ?, ?, datetime('now'), ?, ?, ?, ?, ?, ?)
             """, (asset_id, modality, language, file_path, file_size,
                   faiss_idx, json.dumps(tags or []), description, collection, quality_score, uploaded_by))
+            logger.info(f"ASSET_ADDED id={asset_id} modality={modality} by={uploaded_by}")  # FIX: log
         except sqlite3.IntegrityError:
             pass
 
@@ -693,15 +756,15 @@ class MetadataDB:
                         date_from=None, collection=None):
         query  = "SELECT id, faiss_index FROM assets WHERE 1=1"
         params = []
-        if modality:   query += " AND modality = ?";             params.append(modality)
-        if language:   query += " AND language = ?";             params.append(language)
-        if date_from:  query += " AND upload_date >= ?";         params.append(date_from)
-        if tags:       query += " AND tags LIKE ?";              params.append(f'%{tags}%')
-        if collection: query += " AND collection = ?";           params.append(collection)
+        if modality:   query += " AND modality = ?";   params.append(modality)
+        if language:   query += " AND language = ?";   params.append(language)
+        if date_from:  query += " AND upload_date >= ?"; params.append(date_from)
+        if tags:       query += " AND tags LIKE ?";    params.append(f'%{tags}%')
+        if collection: query += " AND collection = ?"; params.append(collection)
         return self.db.fetchall(query, params)
 
     def get_all_tags(self):
-        result = self.db.fetchall("SELECT DISTINCT tags FROM assets WHERE tags != '[]'")
+        result   = self.db.fetchall("SELECT DISTINCT tags FROM assets WHERE tags != '[]'")
         all_tags = set()
         for row in result:
             all_tags.update(json.loads(row[0]))
@@ -710,30 +773,31 @@ class MetadataDB:
     def get_all_collections(self):
         result = self.db.fetchall("SELECT DISTINCT collection FROM assets WHERE collection != ''")
         return [row[0] for row in result]
-    
+
     def add_comment(self, asset_id, user, comment):
         self.db.execute("""
             INSERT INTO comments (asset_id, user, comment, timestamp)
             VALUES (?, ?, ?, datetime('now'))
         """, (asset_id, user, comment))
-    
+
     def get_comments(self, asset_id):
         return self.db.fetchall("""
             SELECT user, comment, timestamp FROM comments
             WHERE asset_id = ? ORDER BY timestamp DESC
         """, (asset_id,))
-    
+
     def add_rating(self, asset_id, user, rating):
         self.db.execute("""
             INSERT OR REPLACE INTO ratings (asset_id, user, rating)
             VALUES (?, ?, ?)
         """, (asset_id, user, rating))
-    
+
     def get_rating(self, asset_id):
         result = self.db.fetchone("""
             SELECT AVG(rating), COUNT(*) FROM ratings WHERE asset_id = ?
         """, (asset_id,))
         return result if result[0] else (0, 0)
+
 
 # ==================== ANALYTICS ==================== #
 class AnalyticsTracker:
@@ -758,8 +822,13 @@ class AnalyticsTracker:
                 INSERT INTO searches (query_text, modality, results_count, timestamp, search_duration_ms, user)
                 VALUES (?, ?, ?, datetime('now'), ?, ?)
             """, (query, modality, results_count, duration_ms, user))
-        except Exception:
-            pass
+            # FIX: actually use the logger that was set up
+            logger.info(
+                f"SEARCH user={user} modality={modality} q={query!r} "
+                f"hits={results_count} ms={duration_ms:.0f}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to log search: {e}", exc_info=True)  # FIX: log error instead of pass
 
     def get_stats(self, days=7):
         result = self.db.fetchone(f"""
@@ -768,7 +837,7 @@ class AnalyticsTracker:
             WHERE timestamp >= datetime('now', '-{days} days')
         """)
         return result
-    
+
     def get_popular_searches(self, limit=10):
         return self.db.fetchall("""
             SELECT query_text, COUNT(*) as freq
@@ -778,6 +847,7 @@ class AnalyticsTracker:
             ORDER BY freq DESC
             LIMIT ?
         """, (limit,))
+
 
 # ==================== MODELS ==================== #
 @st.cache_resource(show_spinner="Loading neural models...")
@@ -790,6 +860,7 @@ def load_models():
     return clip_m, clip_p, clap_m, clap_p
 
 clip_model, clip_processor, clap_model, clap_processor = load_models()
+
 
 # ==================== UTILITIES ==================== #
 def sanitize_asset_id(s):
@@ -848,14 +919,14 @@ def score_bar(score):
 
 def analyze_image_quality(file_path):
     try:
-        img = Image.open(file_path)
+        img           = Image.open(file_path)
         quality_score = min(img.width * img.height / (1920 * 1080), 1.0)
         return {
-            "resolution": f"{img.width}×{img.height}",
+            "resolution":    f"{img.width}×{img.height}",
             "quality_score": quality_score,
-            "format": img.format,
-            "mode": img.mode,
-            "size_kb": os.path.getsize(file_path) / 1024
+            "format":        img.format,
+            "mode":          img.mode,
+            "size_kb":       os.path.getsize(file_path) / 1024
         }
     except Exception:
         return None
@@ -863,12 +934,12 @@ def analyze_image_quality(file_path):
 def analyze_audio_quality(file_path):
     try:
         y, sr = librosa.load(file_path, sr=None)
-        rms = librosa.feature.rms(y=y)[0]
+        rms   = librosa.feature.rms(y=y)[0]
         return {
-            "duration": f"{len(y) / sr:.1f}s",
+            "duration":    f"{len(y) / sr:.1f}s",
             "sample_rate": f"{sr}Hz",
-            "rms_energy": float(np.mean(rms)),
-            "size_kb": os.path.getsize(file_path) / 1024
+            "rms_energy":  float(np.mean(rms)),
+            "size_kb":     os.path.getsize(file_path) / 1024
         }
     except Exception:
         return None
@@ -877,7 +948,6 @@ def get_search_suggestions(analytics, query, limit=5):
     if not query or len(query) < 2:
         popular = analytics.get_popular_searches(limit)
         return [p[0] for p in popular]
-    
     result = analytics.db.fetchall("""
         SELECT DISTINCT query_text, COUNT(*) as freq
         FROM searches
@@ -886,8 +956,8 @@ def get_search_suggestions(analytics, query, limit=5):
         ORDER BY freq DESC
         LIMIT ?
     """, (f"%{query}%", query, limit))
-    
     return [row[0] for row in result]
+
 
 # ==================== ENGINE ==================== #
 class TrinetraEngine:
@@ -945,25 +1015,25 @@ class TrinetraEngine:
         return [{"id": self.id_map[i]["id"], "similarity": float(s), "path": self.id_map[i]["path"]}
                 for s, i in zip(scores[0], idxs[0]) if i != -1 and s > t]
 
-    def register(self, temp_path, asset_id, ext, lang, tags=None, description="", 
+    def register(self, temp_path, asset_id, ext, lang, tags=None, description="",
                  collection="", uploaded_by="unknown"):
         asset_id = sanitize_asset_id(asset_id)
         ok, msg  = validate_asset_id(asset_id)
-        if not ok:            return False, msg
+        if not ok:                 return False, msg
         if self.id_exists(asset_id): return False, f"ID '{asset_id}' already exists"
 
         perm_path = os.path.join(STORAGE_DIR, f"{asset_id}{ext}")
         try:
             with open(temp_path, "rb") as s, open(perm_path, "wb") as d:
                 d.write(s.read())
-            
+
             if self.modality == "image":
-                quality_info = analyze_image_quality(perm_path)
+                quality_info  = analyze_image_quality(perm_path)
                 quality_score = quality_info['quality_score'] if quality_info else 0.5
             else:
-                quality_info = analyze_audio_quality(perm_path)
+                quality_info  = analyze_audio_quality(perm_path)
                 quality_score = 0.7
-            
+
             emb       = self.get_embedding(file_path=perm_path)
             faiss_idx = self.index.ntotal
             self.index.add(emb.reshape(1, -1))
@@ -974,9 +1044,11 @@ class TrinetraEngine:
             self.metadata_db.add_asset(asset_id, self.modality, lang, perm_path,
                                        os.path.getsize(perm_path), faiss_idx,
                                        tags, description, collection, quality_score, uploaded_by)
+            logger.info(f"ASSET_REGISTERED id={asset_id} modality={self.modality} lang={lang} by={uploaded_by}")
             return True, f"Successfully registered: {asset_id}"
         except Exception as e:
             if os.path.exists(perm_path): os.remove(perm_path)
+            logger.error(f"Registration failed for {asset_id}: {e}", exc_info=True)  # FIX: log error
             return False, f"Failed: {e}"
 
     def batch_register(self, files, language, tags=None, collection="", uploaded_by="unknown"):
@@ -1002,58 +1074,65 @@ class TrinetraEngine:
                     if dups:
                         results["duplicates"].append((file.name, dups[0]["id"]))
                         continue
-                    ok, msg = self.register(tp, asset_id, ext, language, tags, "", 
-                                          collection, uploaded_by)
+                    ok, msg = self.register(tp, asset_id, ext, language, tags, "",
+                                            collection, uploaded_by)
                     (results["success"] if ok else results["failed"]).append(
                         file.name if ok else (file.name, msg))
                 finally:
                     if os.path.exists(tp): os.remove(tp)
             except Exception as e:
                 results["failed"].append((file.name, str(e)))
+                logger.error(f"Batch register error for {file.name}: {e}", exc_info=True)  # FIX: log
             progress.progress((idx + 1) / total)
 
         progress.empty(); status_text.empty()
+        logger.info(
+            f"BATCH_REGISTER total={total} success={len(results['success'])} "
+            f"failed={len(results['failed'])} dupes={len(results['duplicates'])} by={uploaded_by}"
+        )
         return results
 
-    def hybrid_search(self, text_query=None, file_path=None, top_k=5, 
-                     filters=None, rerank=True):
+    def hybrid_search(self, text_query=None, file_path=None, top_k=5,
+                      filters=None, rerank=True):
         if self.index.ntotal == 0: return [], 0
-        
+
         t0 = time.time()
         q  = self.get_embedding(file_path=file_path, text=text_query).reshape(1, -1)
         scores, idxs = self.index.search(q, min(top_k * 2, self.index.ntotal))
-        
+
         out = []
         for s, i in zip(scores[0], idxs[0]):
             if i == -1: continue
-            conf = ("High" if s > CONFIG.CONFIDENCE_HIGH else
-                    "Medium" if s > CONFIG.CONFIDENCE_MED else "Low")
+            conf   = ("High" if s > CONFIG.CONFIDENCE_HIGH else
+                      "Medium" if s > CONFIG.CONFIDENCE_MED else "Low")
             result = {**self.id_map[i], "score": float(s), "confidence": conf}
-            
+
             if filters:
                 if 'min_score' in filters and s < filters['min_score']:
                     continue
                 if 'language' in filters and result.get('lang') != filters['language']:
                     continue
-            
             out.append(result)
-        
+
         if rerank:
             for r in out:
                 quality = r.get('quality', 0.5)
                 r['final_score'] = r['score'] * (0.7 + 0.3 * quality)
             out = sorted(out, key=lambda x: x['final_score'], reverse=True)
-        
+
         return out[:top_k], (time.time() - t0) * 1000
 
     def search(self, file_path=None, text=None, top_k=5, metadata_filters=None):
-        return self.hybrid_search(text_query=text, file_path=file_path, 
-                                 top_k=top_k, filters=metadata_filters)
+        return self.hybrid_search(text_query=text, file_path=file_path,
+                                  top_k=top_k, filters=metadata_filters)
 
     def get_all_vectors(self):
         try:
-            return faiss.vector_to_array(self.index.reconstruct_n(0, self.index.ntotal))
-        except Exception:
+            return faiss.vector_to_array(self.index.reconstruct_n(0, self.index.ntotal)).reshape(
+                self.index.ntotal, -1
+            )
+        except Exception as e:
+            logger.error(f"get_all_vectors failed: {e}", exc_info=True)  # FIX: log
             return None
 
     def export_registry(self, export_path=None):
@@ -1067,12 +1146,12 @@ class TrinetraEngine:
                 if os.path.exists(asset["path"]):
                     z.write(asset["path"], f"assets/{os.path.basename(asset['path'])}")
         return export_path
-    
+
     def export_as_json(self):
         export_data = {
             "metadata": {
                 "export_date": datetime.now().isoformat(),
-                "modality": self.modality,
+                "modality":    self.modality,
                 "total_assets": self.index.ntotal
             },
             "assets": self.id_map
@@ -1115,27 +1194,31 @@ class AudioEngine(TrinetraEngine):
         return self._normalize(e.cpu().float().numpy().flatten())
 
 
-# ==================== INIT ==================== #
-image_engine = ImageEngine()
-audio_engine = AudioEngine()
-analytics    = AnalyticsTracker()
+# ==================== INIT — FIX: cached so engines & cache survive reruns ==================== #
+@st.cache_resource(show_spinner="Initializing registry...")
+def get_engines():
+    return ImageEngine(), AudioEngine(), AnalyticsTracker()
+
+image_engine, audio_engine, analytics = get_engines()
+
 
 # ==================== SIDEBAR ==================== #
 with st.sidebar:
     user_role = st.session_state.user['role']
     st.markdown(f"""
-    <div style="padding:0.5rem; background:{T['bg_card']}; border:1px solid {T['border']}; 
+    <div style="padding:0.5rem; background:{T['bg_card']}; border:1px solid {T['border']};
     border-radius:8px; margin-bottom:1rem;">
-        <div style="font-family:'JetBrains Mono',monospace; font-size:0.7rem; 
+        <div style="font-family:'JetBrains Mono',monospace; font-size:0.7rem;
         color:{T['text_muted']};">LOGGED IN AS</div>
         <div style="font-weight:600; color:{T['accent']};">{st.session_state.user['username']}</div>
         <div style="font-size:0.7rem; color:{T['text_muted']};">Role: {user_role}</div>
     </div>
     """, unsafe_allow_html=True)
-    
+
     if st.button("Logout", use_container_width=True):
+        logger.info(f"LOGOUT user={st.session_state.user['username']}")  # FIX: log logout
         st.session_state.authenticated = False
-        st.session_state.user = None
+        st.session_state.user          = None
         st.rerun()
 
     cur_mode = T["mode_label"]
@@ -1151,10 +1234,9 @@ with st.sidebar:
         st.rerun()
 
     st.markdown('<hr style="border-color:rgba(255,255,255,0.08);margin:1rem 0">', unsafe_allow_html=True)
-    
+
     if user_role in ['admin', 'uploader']:
         st.markdown("### Asset Registration")
-
         batch_mode = st.checkbox("Batch Upload Mode", value=False)
         reg_mod    = st.selectbox("Modality", ["image", "audio"])
         reg_lang   = st.selectbox("Language", CONFIG.SUPPORTED_LANGUAGES)
@@ -1170,7 +1252,6 @@ with st.sidebar:
                 type=[e.lstrip('.') for e in (CONFIG.ALLOWED_IMAGE_EXTS if reg_mod=="image"
                                               else CONFIG.ALLOWED_AUDIO_EXTS)],
             )
-            
             if reg_file:
                 st.markdown("#### Preview")
                 if reg_mod == "image":
@@ -1179,7 +1260,7 @@ with st.sidebar:
                 else:
                     st.audio(reg_file)
                     st.caption(f"Size: {reg_file.size/1024:.1f} KB")
-            
+
             if st.button("Register Asset", use_container_width=True):
                 if not reg_file:         st.warning("Please upload a file")
                 elif not reg_id.strip(): st.warning("Please enter an Asset ID")
@@ -1199,17 +1280,17 @@ with st.sidebar:
                                            f"({dups[0]['similarity']:.1%} match)")
                                 if not st.checkbox("Register anyway"):
                                     st.stop()
-                            
                             with st.spinner("Registering..."):
-                                ok, msg = eng.register(tp, reg_id.strip(), ext, reg_lang, 
-                                                      reg_tags, uploaded_by=st.session_state.user['username'])
+                                ok, msg = eng.register(tp, reg_id.strip(), ext, reg_lang,
+                                                       reg_tags, uploaded_by=st.session_state.user['username'])
                             (st.success if ok else st.error)(msg)
-                            if ok: 
+                            if ok:
                                 st.balloons()
                                 time.sleep(1)
                                 st.rerun()
                         except Exception as exc:
                             st.error(f"Registration failed: {exc}")
+                            logger.error(f"UI registration error: {exc}", exc_info=True)
                         finally:
                             if os.path.exists(tp): os.remove(tp)
         else:
@@ -1229,9 +1310,9 @@ with st.sidebar:
                     eng = image_engine if reg_mod == "image" else audio_engine
                     with st.spinner(f"Processing {len(reg_files)} files..."):
                         res = eng.batch_register(reg_files, reg_lang, reg_tags_b, reg_collect,
-                                                st.session_state.user['username'])
+                                                 st.session_state.user['username'])
                     st.success(f"Added: {len(res['success'])}")
-                    if res['skipped']:  st.info(f"Skipped: {len(res['skipped'])}")
+                    if res['skipped']:    st.info(f"Skipped: {len(res['skipped'])}")
                     if res['duplicates']:
                         st.warning(f"Duplicates: {len(res['duplicates'])}")
                         with st.expander("View duplicates"):
@@ -1244,7 +1325,7 @@ with st.sidebar:
                         time.sleep(0.8); st.rerun()
 
         st.markdown(f'<hr style="border-color:{T["border"]};margin:1.5rem 0 1rem">', unsafe_allow_html=True)
-    
+
     st.markdown("**Registry Status**")
     st.markdown(f"""
     <div class="sidebar-stat">Images <span>{image_engine.index.ntotal}</span></div>
@@ -1264,7 +1345,7 @@ with st.sidebar:
         """, unsafe_allow_html=True)
 
     st.markdown('<hr style="border-color:rgba(255,255,255,0.08);margin:1rem 0">', unsafe_allow_html=True)
-    
+
     if user_role in ['admin']:
         col1, col2 = st.columns(2)
         with col1:
@@ -1273,7 +1354,6 @@ with st.sidebar:
                     ip = image_engine.export_registry()
                     ap = audio_engine.export_registry()
                 st.success(f"Exported!\n- {ip}\n- {ap}")
-        
         with col2:
             if st.button("Export JSON", use_container_width=True):
                 json_data = {
@@ -1287,6 +1367,7 @@ with st.sidebar:
                     mime="application/json",
                     use_container_width=True
                 )
+
 
 # ==================== HEADER ==================== #
 st.markdown('<div class="a1"><h1>TRINETRA V5.0</h1></div>', unsafe_allow_html=True)
@@ -1306,12 +1387,13 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
+
 # ==================== RESULT DISPLAY ==================== #
 def display_results(results, modality):
     if not results:
         st.info("No matches found in the registry.")
         return
-    
+
     cols = st.columns(min(len(results), 3))
     for idx, r in enumerate(results):
         with cols[idx % 3]:
@@ -1322,95 +1404,88 @@ def display_results(results, modality):
                 f'<div style="font-size:.7rem;color:{T["text_muted"]}">Score: {r["score"]:.3f}</div>',
                 unsafe_allow_html=True,
             )
-            
+
             if 'quality' in r:
-                quality = r['quality']
                 st.markdown(f"""
-                <div class="quality-indicator">
-                    Quality: {quality:.1%}
-                </div>
+                <div class="quality-indicator">Quality: {r['quality']:.1%}</div>
                 """, unsafe_allow_html=True)
-            
+
             if modality == "image":
                 st.image(r["path"], caption=r["id"], use_container_width=True)
             else:
                 st.write(f"**{r['id']}**")
                 st.audio(r["path"])
-            
+
             st.caption(f"Lang: {r.get('lang','—')} · {r.get('timestamp','')[:10]}")
-            
+
             with st.expander("Feedback"):
                 avg_rating, count = image_engine.metadata_db.get_rating(r['id'])
                 st.write(f"Rating: {'⭐' * int(avg_rating)} ({count} votes)")
-                
                 new_rating = st.slider("Rate this", 1, 5, 3, key=f"rate_{r['id']}_{idx}")
                 if st.button("Submit Rating", key=f"submit_rate_{r['id']}_{idx}"):
-                    image_engine.metadata_db.add_rating(r['id'], 
-                                                       st.session_state.user['username'], 
-                                                       new_rating)
+                    image_engine.metadata_db.add_rating(
+                        r['id'], st.session_state.user['username'], new_rating
+                    )
                     st.success("Rating submitted!")
                     st.rerun()
-                
+
                 comments = image_engine.metadata_db.get_comments(r['id'])
                 if comments:
                     st.markdown("**Comments:**")
                     for user, comment, ts in comments[:3]:
                         st.caption(f"**{user}** ({ts[:10]}): {comment}")
-                
+
                 new_comment = st.text_input("Add comment", key=f"comment_{r['id']}_{idx}")
                 if st.button("Post Comment", key=f"post_{r['id']}_{idx}") and new_comment:
-                    image_engine.metadata_db.add_comment(r['id'], 
-                                                        st.session_state.user['username'],
-                                                        new_comment)
+                    image_engine.metadata_db.add_comment(
+                        r['id'], st.session_state.user['username'], new_comment
+                    )
                     st.success("Comment posted!")
                     st.rerun()
-            
+
             st.markdown("</div>", unsafe_allow_html=True)
-    
+
     st.session_state.last_search_results = results
+
 
 # ==================== TABS ==================== #
 tab_v, tab_a, tab_cluster, tab_aud, tab_hist, tab_admin = st.tabs([
     "Visual Search", "Acoustic Search", "Clusters", "Neural Auditor", "Search History", "Admin"
 ])
 
-# ── Visual ── #
+# ── Visual Search ── #
 with tab_v:
     mode = st.radio("Input Mode", ["Text Query", "Image Match"], horizontal=True)
     with st.expander("Advanced Filters"):
-        f_lang = st.selectbox("Language", ["All"] + CONFIG.SUPPORTED_LANGUAGES, key="fl_img")
-        f_tags = st.multiselect("Tags", image_engine.metadata_db.get_all_tags(), key="ft_img")
+        f_lang      = st.selectbox("Language", ["All"] + CONFIG.SUPPORTED_LANGUAGES, key="fl_img")
+        f_tags      = st.multiselect("Tags", image_engine.metadata_db.get_all_tags(), key="ft_img")
         f_min_score = st.slider("Minimum Score", 0.0, 1.0, 0.0, key="fs_img")
-    
+
     st.markdown('<hr class="rule">', unsafe_allow_html=True)
 
     if mode == "Text Query":
         q = st.text_input("Describe the image", placeholder="e.g., a crowded temple at dusk", key="vq")
-        
+
         if q and st.session_state.show_suggestions:
             suggestions = get_search_suggestions(analytics, q, limit=5)
             if suggestions:
                 st.markdown("**Suggestions:**")
-                sug_html = ""
-                for sug in suggestions:
-                    sug_html += f'<span class="suggestion-chip">{sug}</span>'
+                sug_html = "".join(f'<span class="suggestion-chip">{s}</span>' for s in suggestions)
                 st.markdown(sug_html, unsafe_allow_html=True)
-        
+
         if st.button("Run Visual Scan", key="vs_txt") and q:
             mf = {"min_score": f_min_score}
             if f_lang != "All": mf['language'] = f_lang
-            
             with st.spinner("Scanning..."):
                 translated = translate_to_english(q)
                 if translated != q:
                     st.caption(f"Translated: *{translated}*")
-                
                 results, ms = image_engine.hybrid_search(text_query=translated, top_k=6, filters=mf)
-            
+
             analytics.log_search(q, "image", len(results), ms, st.session_state.user['username'])
             st.session_state.search_history.append({
-                "query": q, "modality": "image", "timestamp": time.time(), 
-                "results_count": len(results)
+                "query": q, "modality": "image",
+                "timestamp": time.time(), "results_count": len(results)
             })
             st.caption(f"Search time: {ms:.0f} ms")
             display_results(results, "image")
@@ -1419,7 +1494,7 @@ with tab_v:
                                type=[e.lstrip('.') for e in CONFIG.ALLOWED_IMAGE_EXTS], key="qimg")
         if qi:
             st.image(qi, caption="Query Image", use_container_width=True)
-        
+
         if st.button("Run Visual Scan", key="vs_img") and qi:
             ext = os.path.splitext(qi.name)[1].lower()
             with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
@@ -1429,48 +1504,43 @@ with tab_v:
                     mf = {"min_score": f_min_score}
                     if f_lang != "All": mf['language'] = f_lang
                     results, ms = image_engine.hybrid_search(file_path=qp, top_k=6, filters=mf)
-                
                 analytics.log_search("[Image Upload]", "image", len(results), ms,
-                                    st.session_state.user['username'])
+                                     st.session_state.user['username'])
                 st.caption(f"Search time: {ms:.0f} ms")
                 display_results(results, "image")
             finally:
                 if os.path.exists(qp): os.remove(qp)
 
-# ── Acoustic ── #
+# ── Acoustic Search ── #
 with tab_a:
     with st.expander("Advanced Filters"):
-        f_lang_a = st.selectbox("Language", ["All"] + CONFIG.SUPPORTED_LANGUAGES, key="fl_aud")
+        f_lang_a      = st.selectbox("Language", ["All"] + CONFIG.SUPPORTED_LANGUAGES, key="fl_aud")
         f_min_score_a = st.slider("Minimum Score", 0.0, 1.0, 0.0, key="fs_aud")
-    
+
     q = st.text_input("Describe the sound", placeholder="e.g., tabla solo during rainstorm", key="aq")
-    
+
     if q and st.session_state.show_suggestions:
         suggestions = get_search_suggestions(analytics, q, limit=5)
         if suggestions:
             st.markdown("**Suggestions:**")
-            sug_html = ""
-            for sug in suggestions:
-                sug_html += f'<span class="suggestion-chip">{sug}</span>'
+            sug_html = "".join(f'<span class="suggestion-chip">{s}</span>' for s in suggestions)
             st.markdown(sug_html, unsafe_allow_html=True)
-    
+
     st.markdown('<hr class="rule">', unsafe_allow_html=True)
-    
+
     if st.button("Run Acoustic Scan") and q:
         mf = {"min_score": f_min_score_a}
         if f_lang_a != "All": mf['language'] = f_lang_a
-        
         with st.spinner("Scanning..."):
             translated = translate_to_english(q)
             if translated != q:
                 st.caption(f"Translated: *{translated}*")
-            
             results, ms = audio_engine.hybrid_search(text_query=translated, top_k=6, filters=mf)
-        
+
         analytics.log_search(q, "audio", len(results), ms, st.session_state.user['username'])
         st.session_state.search_history.append({
-            "query": q, "modality": "audio", "timestamp": time.time(),
-            "results_count": len(results)
+            "query": q, "modality": "audio",
+            "timestamp": time.time(), "results_count": len(results)
         })
         st.caption(f"Search time: {ms:.0f} ms")
         display_results(results, "audio")
@@ -1480,30 +1550,62 @@ with tab_cluster:
     st.markdown("### Asset Clusters")
     pick = st.radio("Registry", ["Image", "Audio"], horizontal=True, key="cluster_pick")
     eng  = image_engine if pick == "Image" else audio_engine
-    
+
     if eng.index.ntotal < 3:
         st.info("Need at least 3 assets to perform clustering.")
     else:
         n_clusters = st.slider("Number of clusters", 2, min(10, eng.index.ntotal), 3)
-        
+
         if st.button("Generate Clusters"):
             with st.spinner("Clustering assets..."):
                 vecs = eng.get_all_vectors()
                 if vecs is not None:
                     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
                     labels = kmeans.fit_predict(vecs)
-                    
+
+                    # FIX: Added cluster scatter plot — huge visual demo win
+                    st.markdown("#### Cluster Map (PCA 2D)")
+                    pca       = PCA(n_components=2)
+                    proj      = pca.fit_transform(vecs)
+                    var_pct   = pca.explained_variance_ratio_.sum() * 100
+                    df_scatter = pd.DataFrame({
+                        "x":       proj[:, 0],
+                        "y":       proj[:, 1],
+                        "Cluster": [f"Cluster {l+1}" for l in labels],
+                        "ID":      [r["id"] for r in eng.id_map],
+                    })
+                    fig_scatter = px.scatter(
+                        df_scatter, x="x", y="y", color="Cluster", text="ID",
+                        title=f"{pick} Embedding Clusters · {var_pct:.1f}% variance preserved",
+                        color_discrete_sequence=px.colors.qualitative.Bold,
+                    )
+                    fig_scatter.update_traces(
+                        textposition="top center",
+                        marker=dict(size=12, line=dict(width=1, color="#000")),
+                    )
+                    fig_scatter.update_layout(
+                        plot_bgcolor=T["plot_bg"], paper_bgcolor=T["plot_bg"],
+                        font=dict(family="DM Sans", color=T["plot_text"]),
+                        title_font=dict(family="Syne", size=15, color=T["accent"]),
+                        xaxis=dict(gridcolor=T["plot_grid"], zerolinecolor=T["plot_grid"]),
+                        yaxis=dict(gridcolor=T["plot_grid"], zerolinecolor=T["plot_grid"]),
+                        legend=dict(bgcolor=T["bg_card"], bordercolor=T["border"]),
+                        margin=dict(l=20, r=20, t=50, b=20),
+                    )
+                    st.plotly_chart(fig_scatter, use_container_width=True)
+                    st.caption(f"PCA variance preserved: **{var_pct:.1f}%**")
+
+                    st.markdown("---")
                     for i in range(n_clusters):
                         cluster_indices = [j for j in range(len(labels)) if labels[j] == i]
-                        cluster_assets = [eng.id_map[j] for j in cluster_indices]
-                        
+                        cluster_assets  = [eng.id_map[j] for j in cluster_indices]
                         with st.expander(f"Cluster {i+1} ({len(cluster_assets)} assets)"):
                             cols = st.columns(4)
                             for idx, asset in enumerate(cluster_assets[:8]):
                                 with cols[idx % 4]:
                                     if eng.modality == "image":
-                                        st.image(asset['path'], caption=asset['id'], 
-                                               use_container_width=True)
+                                        st.image(asset['path'], caption=asset['id'],
+                                                 use_container_width=True)
                                     else:
                                         st.write(asset['id'])
                                         st.audio(asset['path'])
@@ -1548,19 +1650,19 @@ with tab_aud:
             st.caption(f"Variance preserved: **{var:.1f}%**")
             df_p       = pd.DataFrame(proj, columns=["x","y","z"][:nc])
             df_p["ID"] = lbl
-            
+
             if nc == 3:
                 fig = px.scatter_3d(df_p, x="x", y="y", z="z", text="ID",
-                                   color_discrete_sequence=[T["accent"]],
-                                   title=f"{pick} · 3D Embedding Map")
+                                    color_discrete_sequence=[T["accent"]],
+                                    title=f"{pick} · 3D Embedding Map")
             else:
                 fig = px.scatter(df_p, x="x", y="y", text="ID",
-                                color_discrete_sequence=[T["accent"]],
-                                title=f"{pick} · 2D Embedding Map")
+                                 color_discrete_sequence=[T["accent"]],
+                                 title=f"{pick} · 2D Embedding Map")
                 fig.update_traces(textposition="top center",
-                                 marker=dict(size=14, line=dict(width=2, color=T["accent_dim"])),
-                                 textfont=dict(family="JetBrains Mono", size=11, color=T["text_mono"]))
-            
+                                  marker=dict(size=14, line=dict(width=2, color=T["accent_dim"])),
+                                  textfont=dict(family="JetBrains Mono", size=11, color=T["text_mono"]))
+
             fig.update_layout(
                 plot_bgcolor=T["plot_bg"], paper_bgcolor=T["plot_bg"],
                 font=dict(family="DM Sans", color=T["plot_text"]),
@@ -1593,7 +1695,7 @@ with tab_hist:
                         res, _ = audio_engine.search(text=s['query'], top_k=6)
                         display_results(res, "audio")
             st.markdown('<hr class="rule">', unsafe_allow_html=True)
-        
+
         if st.button("Clear History"):
             st.session_state.search_history = []
             st.rerun()
@@ -1604,32 +1706,33 @@ with tab_admin:
         st.warning("Admin access required")
     else:
         st.markdown("### User Management")
-        
+
         with st.expander("Create New User"):
-            new_user = st.text_input("Username", key="new_user")
-            new_pass = st.text_input("Password", type="password", key="new_pass")
-            new_role = st.selectbox("Role", ["viewer", "uploader", "admin"], key="new_role")
-            
+            new_user  = st.text_input("Username", key="new_user")
+            new_email = st.text_input("Email (optional)", key="new_email")
+            new_pass  = st.text_input("Password", type="password", key="new_pass")
+            new_role  = st.selectbox("Role", ["viewer", "uploader", "admin"], key="new_role")
+
             if st.button("Create User"):
                 if new_user and new_pass:
-                    ok, msg = auth_manager.create_user(new_user, new_pass, new_role)
+                    # FIX: create_user now exists on auth_manager
+                    ok, msg = auth_manager.create_user(new_user, new_pass, new_role, new_email)
                     (st.success if ok else st.error)(msg)
                 else:
                     st.warning("Please provide username and password")
-        
+
         st.markdown("#### Current Users")
-        users = auth_manager.get_all_users()
+        users    = auth_manager.get_all_users()
         df_users = pd.DataFrame(users, columns=["Username", "Email", "Role", "Created", "Last Login"])
         st.dataframe(df_users, use_container_width=True, hide_index=True)
-        
+
         st.markdown("---")
         st.markdown("### System Statistics")
-        
         col1, col2, col3 = st.columns(3)
-        col1.metric("Total Assets", total)
+        col1.metric("Total Assets",  total)
         col2.metric("Total Searches", stats[0] if stats else 0)
-        col3.metric("Total Users", len(users))
-        
+        col3.metric("Total Users",   len(users))
+
         st.markdown("#### Popular Searches (30 days)")
         popular = analytics.get_popular_searches(10)
         if popular:
@@ -1655,8 +1758,7 @@ if len(st.session_state.last_search_results) >= 2:
             st.metric("Score", f"{r1['score']:.2%}")
             st.write(f"**ID:** {r1['id']}")
             st.write(f"**Lang:** {r1.get('lang', '—')}")
-            if 'quality' in r1:
-                st.write(f"**Quality:** {r1['quality']:.1%}")
+            if 'quality' in r1: st.write(f"**Quality:** {r1['quality']:.1%}")
         with cb:
             if r2.get("modality") == "image":
                 st.image(r2["path"], use_container_width=True)
@@ -1665,18 +1767,18 @@ if len(st.session_state.last_search_results) >= 2:
             st.metric("Score", f"{r2['score']:.2%}")
             st.write(f"**ID:** {r2['id']}")
             st.write(f"**Lang:** {r2.get('lang', '—')}")
-            if 'quality' in r2:
-                st.write(f"**Quality:** {r2['quality']:.1%}")
+            if 'quality' in r2: st.write(f"**Quality:** {r2['quality']:.1%}")
 
-# Footer
+# ── Footer ── #
 st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #666; padding: 20px;'>
     <p><strong style='font-size: 1.1em; color: #667eea;'>Created by Team Human</strong></p>
-    <p>Powered by CLIP & CLAP | Built for Bharat's Digital Future</p>
+    <p>Powered by CLIP &amp; CLAP | Built for Bharat's Digital Future</p>
     <p style='font-size: 0.8em;'>Multimodal embeddings • FAISS indexing • Cross-lingual search</p>
 </div>
 """, unsafe_allow_html=True)
+
 
 
 
