@@ -329,7 +329,7 @@ class AuthManagerWithOTP:
                 INSERT INTO users
                 (username, email, password_hash, full_name, role, is_verified, created_at, registration_date)
                 VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-            """, (username, email, password_hash, full_name, "viewer", 1))
+            """, (username, email, password_hash, full_name, "uploader", 1))
 
             self.db.execute("DELETE FROM registration_requests WHERE email = ?", (email,))
             logger.info(f"REGISTER_SUCCESS user={username} email={email}")  # FIX: log success
@@ -1553,6 +1553,23 @@ with st.sidebar:
 
         st.markdown(f'<hr style="border-color:{T["border"]};margin:1.5rem 0 1rem">', unsafe_allow_html=True)
 
+    else:
+        # Viewer role — clearly explain why upload is not visible
+        st.markdown(f"""
+        <div style="background:{T['bg_card']};border:1px solid {T['border']};
+        border-left:3px solid {T['accent']};border-radius:8px;padding:0.9rem 1rem;margin-bottom:1rem;">
+            <div style="font-family:'JetBrains Mono',monospace;font-size:0.65rem;
+            text-transform:uppercase;letter-spacing:0.1em;color:{T['accent']};margin-bottom:4px;">
+                🔒 Viewer Access
+            </div>
+            <div style="font-size:0.8rem;color:{T['text_muted']};line-height:1.5;">
+                Asset registration is not available for your role.<br>
+                Contact an <strong style="color:{T['text_primary']}">admin</strong> to be upgraded
+                to <strong style="color:{T['accent']}">uploader</strong> or <strong style="color:{T['accent']}">admin</strong> role.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
     st.markdown("**Registry Status**")
     st.markdown(f"""
     <div class="sidebar-stat">Images <span>{image_engine.index.ntotal}</span></div>
@@ -2005,6 +2022,7 @@ st.markdown("""
     <p style='font-size: 0.8em;'>Multimodal embeddings • FAISS indexing • Cross-lingual search</p>
 </div>
 """, unsafe_allow_html=True)
+
 
 
 
