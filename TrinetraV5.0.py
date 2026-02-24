@@ -165,11 +165,13 @@ class EmailOTPSender:
                 server.login(self.sender_email, self.sender_password)
                 server.sendmail(self.sender_email, recipient_email, message.as_string())
 
-            logger.info(f"OTP email sent to {recipient_email}")  # FIX: log success
-            return True, "OTP sent successfully"
+            logger.info(f"OTP email sent to {recipient_email}")
+            # email_sent=True, no need to show on screen
+            return True, "OTP sent successfully", None
         except Exception as e:
-            logger.warning(f"Email service unavailable for {recipient_email}: {e}")  # FIX: log warning
-            return False, "Email service unavailable. Using demo mode. OTP will be shown on screen."
+            logger.warning(f"Email service unavailable for {recipient_email}: {e}")
+            # email_sent=False → always return the raw OTP so UI can display it
+            return False, "Email service unavailable — your OTP is shown below.", otp
 
 
 # ==================== ENHANCED AUTHENTICATION WITH OTP ==================== #
@@ -284,22 +286,27 @@ class AuthManagerWithOTP:
         otp      = self.otp_sender.generate_otp()
         otp_hash = self.hash_otp(otp)
 
-        success, message = self.otp_sender.send_otp_email(email, otp, username)
+        email_sent, email_msg, fallback_otp = self.otp_sender.send_otp_email(email, otp, username)
 
         try:
             password_hash = self.hash_password(password)
-            # FIX: only otp_hash stored — no plaintext otp column
             self.db.execute("""
                 INSERT INTO registration_requests
                 (email, username, password_hash, full_name, otp_hash, created_at, expires_at)
                 VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now', '+10 minutes'))
             """, (email, username, password_hash, full_name, otp_hash))
 
-            logger.info(f"REGISTER_REQUEST user={username} email={email}")  # FIX: log it
+            logger.info(f"REGISTER_REQUEST user={username} email={email} email_sent={email_sent}")
 
-            # FIX: only expose raw OTP in DEBUG mode via console, never in prod UI
-            demo_otp = otp if os.getenv("DEBUG_MODE", "1") == "1" else None
-            return True, f"OTP sent to {email}. Valid for 10 minutes.", demo_otp
+            # Always expose OTP on screen when email delivery fails (e.g. SMTP not configured)
+            # When email works fine, fallback_otp is None so nothing is shown
+            demo_otp = fallback_otp
+            status_msg = (
+                f"OTP sent to {email}. Valid for 10 minutes."
+                if email_sent
+                else f"⚠️ Email delivery failed — use the OTP shown on screen below."
+            )
+            return True, status_msg, demo_otp
         except Exception as e:
             logger.error(f"Registration request failed for {email}: {e}", exc_info=True)
             return False, f"Registration request failed: {str(e)}", None
@@ -343,26 +350,26 @@ class AuthManagerWithOTP:
             "SELECT username FROM registration_requests WHERE email = ?", (email,)
         )
         if not result:
-            return False, "No pending registration found for this email"
+            return False, "No pending registration found for this email", None
 
         username = result[0]
         otp      = self.otp_sender.generate_otp()
         otp_hash = self.hash_otp(otp)
 
-        self.otp_sender.send_otp_email(email, otp, username)
+        email_sent, _, fallback_otp = self.otp_sender.send_otp_email(email, otp, username)
 
         try:
-            # FIX: update only otp_hash — no plaintext otp column
             self.db.execute("""
                 UPDATE registration_requests
                 SET otp_hash = ?, created_at = datetime('now'), expires_at = datetime('now', '+10 minutes')
                 WHERE email = ?
             """, (otp_hash, email))
 
-            logger.info(f"OTP_RESEND email={email}")  # FIX: log it
+            logger.info(f"OTP_RESEND email={email} email_sent={email_sent}")
 
-            demo_otp = otp if os.getenv("DEBUG_MODE", "1") == "1" else None
-            return True, "OTP resent successfully", demo_otp
+            demo_otp   = fallback_otp  # None if email sent OK, raw OTP if email failed
+            status_msg = "OTP resent successfully." if email_sent else "⚠️ Email failed — use the OTP shown on screen."
+            return True, status_msg, demo_otp
         except Exception as e:
             logger.error(f"Resend OTP failed for {email}: {e}", exc_info=True)
             return False, f"Failed to resend OTP: {str(e)}", None
@@ -455,11 +462,16 @@ class AuthManagerWithOTP:
             VALUES (?, ?, datetime('now'), datetime('now', '+10 minutes'))
         """, (email, otp_hash))
 
-        self.otp_sender.send_otp_email(email, otp, username)
-        logger.info(f"RESET_REQUEST user={username} email={email}")
+        email_sent, _, fallback_otp = self.otp_sender.send_otp_email(email, otp, username)
+        logger.info(f"RESET_REQUEST user={username} email={email} email_sent={email_sent}")
 
-        demo_otp = otp if os.getenv("DEBUG_MODE", "1") == "1" else None
-        return True, f"OTP sent to {email}. Valid for 10 minutes.", demo_otp
+        demo_otp   = fallback_otp  # None if email delivered, raw OTP if email failed
+        status_msg = (
+            f"OTP sent to {email}. Valid for 10 minutes."
+            if email_sent
+            else "⚠️ Email delivery failed — use the OTP shown on screen below."
+        )
+        return True, status_msg, demo_otp
 
     def verify_reset_otp(self, email, otp):
         """Step 2: verify the OTP — returns (success, message)."""
@@ -761,8 +773,9 @@ def show_enhanced_login_page(auth_manager):
                 st.markdown("### Verify OTP")
                 st.info(f"📧 OTP sent to: **{st.session_state.reset_email}**")
 
-                if st.session_state.reset_demo_otp and os.getenv("DEBUG_MODE", "1") == "1":
-                    st.warning(f"⏱️ Debug OTP: **{st.session_state.reset_demo_otp}** (remove in prod)")
+                if st.session_state.reset_demo_otp:
+                    st.warning(f"📋 Email delivery failed. Your OTP: **{st.session_state.reset_demo_otp}**"
+                               f" — valid for 10 minutes.")
 
                 fp_otp = st.text_input("Enter 6-digit OTP", placeholder="000000", max_chars=6, key="fp_otp")
 
@@ -881,9 +894,10 @@ def show_enhanced_login_page(auth_manager):
                 st.markdown("### Verify Email")
                 st.info(f"📧 OTP sent to: {st.session_state.temp_email}")
 
-                # FIX: Only show demo OTP when DEBUG_MODE=1 (set by dev), never in prod
-                if st.session_state.demo_otp and os.getenv("DEBUG_MODE", "1") == "1":
-                    st.warning(f"⏱️ Demo OTP: **{st.session_state.demo_otp}** (debug mode only — remove in prod)")
+                # Show OTP on screen whenever email delivery failed (demo_otp is set by backend only in that case)
+                if st.session_state.demo_otp:
+                    st.warning(f"📋 Email delivery failed. Your OTP: **{st.session_state.demo_otp}**"
+                               f" — valid for 10 minutes.")
 
                 otp = st.text_input("Enter 6-digit OTP", placeholder="000000", max_chars=6, key="otp_input")
 
@@ -2022,6 +2036,7 @@ st.markdown("""
     <p style='font-size: 0.8em;'>Multimodal embeddings • FAISS indexing • Cross-lingual search</p>
 </div>
 """, unsafe_allow_html=True)
+
 
 
 
