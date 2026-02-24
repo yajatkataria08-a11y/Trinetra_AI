@@ -13,7 +13,12 @@ import plotly.express as px
 import sqlite3
 import hashlib
 import logging
+import smtplib
+import secrets
+import string
 from datetime import datetime, timedelta
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from sklearn.decomposition import PCA
 from sklearn.cluster import KMeans
 from PIL import Image
@@ -42,9 +47,9 @@ STORAGE_DIR = os.path.join(BASE_DIR, "storage")
 os.makedirs(STORAGE_DIR, exist_ok=True)
 os.makedirs(BASE_DIR,    exist_ok=True)
 
-# ==================== SQLITE CONTEXT MANAGER ==================== #
+# ==================== THREAD-SAFE DATABASE CONNECTION ==================== #
 class DatabaseConnection:
-    """Thread-safe SQLite connection wrapper"""
+    """Thread-safe SQLite connection wrapper - FIXES DATABASE LOCKING"""
     def __init__(self, db_path):
         self.db_path = db_path
         self.local = None
@@ -86,69 +91,245 @@ class DatabaseConnection:
             self.local.close()
             self.local = None
 
-# ==================== AUTHENTICATION ==================== #
-class AuthManager:
+# ==================== EMAIL OTP SENDER ==================== #
+class EmailOTPSender:
+    """Send OTP emails for registration verification"""
+    
+    def __init__(self, smtp_server="smtp.gmail.com", smtp_port=587):
+        self.smtp_server = smtp_server
+        self.smtp_port = smtp_port
+        self.sender_email = os.getenv("SMTP_EMAIL", "noreply@trinetra.local")
+        self.sender_password = os.getenv("SMTP_PASSWORD", "password")
+    
+    def generate_otp(self, length=6):
+        """Generate a random OTP"""
+        return ''.join(secrets.choice(string.digits) for _ in range(length))
+    
+    def send_otp_email(self, recipient_email, otp, username):
+        """Send OTP to user email"""
+        try:
+            subject = "Trinetra Registration - OTP Verification"
+            html_body = f"""
+            <html>
+                <body style="font-family: Arial, sans-serif; background-color: #f4f4f4; padding: 20px;">
+                    <div style="max-width: 500px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
+                        <h2 style="color: #e8a020; text-align: center;">TRINETRA V5.0</h2>
+                        <h3 style="color: #333;">Welcome, {username}!</h3>
+                        <p style="color: #666; font-size: 16px;">Your One-Time Password (OTP) for registration is:</p>
+                        <div style="background-color: #f0f0f0; padding: 20px; border-radius: 5px; text-align: center; margin: 20px 0;">
+                            <h1 style="color: #e8a020; letter-spacing: 5px; margin: 0;">{otp}</h1>
+                        </div>
+                        <p style="color: #666;"><strong>Important:</strong> This OTP is valid for 10 minutes only.</p>
+                        <p style="color: #666; font-size: 14px;">If you didn't request this, please ignore this email.</p>
+                        <hr style="border: none; border-top: 1px solid #ddd; margin: 30px 0;">
+                        <p style="color: #999; font-size: 12px; text-align: center;">Team Human | Created with ❤️ for Bharat's Digital Future</p>
+                    </div>
+                </body>
+            </html>
+            """
+            message = MIMEMultipart("alternative")
+            message["Subject"] = subject
+            message["From"] = self.sender_email
+            message["To"] = recipient_email
+            message.attach(MIMEText(html_body, "html"))
+            
+            with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
+                server.starttls()
+                server.login(self.sender_email, self.sender_password)
+                server.sendmail(self.sender_email, recipient_email, message.as_string())
+            
+            return True, "OTP sent successfully"
+        except Exception as e:
+            return False, f"Email service unavailable. Using demo mode. OTP will be shown on screen."
+
+# ==================== ENHANCED AUTHENTICATION WITH OTP ==================== #
+class AuthManagerWithOTP:
+    """Enhanced authentication with email OTP verification"""
+    
     def __init__(self, db_path=None):
         if db_path is None:
             db_path = os.path.join("trinetra_registry", "users.db")
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
         self.db = DatabaseConnection(db_path)
+        self.otp_sender = EmailOTPSender()
         self._create_tables()
         self._create_default_admin()
     
     def _create_tables(self):
+        """Create users and OTP verification tables"""
         self.db.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
+                email TEXT UNIQUE NOT NULL,
                 password_hash TEXT NOT NULL,
+                full_name TEXT,
                 role TEXT NOT NULL,
+                is_verified INTEGER DEFAULT 0,
                 created_at TEXT NOT NULL,
-                last_login TEXT
+                last_login TEXT,
+                registration_date TEXT
+            )
+        """)
+        
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS registration_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT UNIQUE NOT NULL,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                full_name TEXT,
+                otp TEXT NOT NULL,
+                otp_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                is_verified INTEGER DEFAULT 0
             )
         """)
     
     def _create_default_admin(self):
-        """Create default admin account: admin/admin123"""
+        """Create default admin account"""
         try:
             admin_hash = hashlib.sha256("admin123".encode()).hexdigest()
             self.db.execute("""
-                INSERT INTO users (username, password_hash, role, created_at)
-                VALUES (?, ?, ?, datetime('now'))
-            """, ("admin", admin_hash, "admin"))
+                INSERT INTO users 
+                (username, email, password_hash, full_name, role, is_verified, created_at, registration_date)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            """, ("admin", "admin@trinetra.local", admin_hash, "Administrator", "admin", 1))
         except sqlite3.IntegrityError:
-            pass  # Admin already exists
+            pass
     
     def hash_password(self, password):
         return hashlib.sha256(password.encode()).hexdigest()
     
+    def hash_otp(self, otp):
+        return hashlib.sha256(otp.encode()).hexdigest()
+    
+    def request_registration(self, email, username, password, full_name=""):
+        """Step 1: User provides email, username, password"""
+        if not email or '@' not in email:
+            return False, "Invalid email address", None
+        if len(username) < 3:
+            return False, "Username must be at least 3 characters", None
+        if len(password) < 6:
+            return False, "Password must be at least 6 characters", None
+        
+        result = self.db.fetchone(
+            "SELECT username FROM registration_requests WHERE email = ? OR username = ?",
+            (email, username)
+        )
+        if result:
+            return False, "Email or username already registered", None
+        
+        result = self.db.fetchone(
+            "SELECT username FROM users WHERE email = ? OR username = ?",
+            (email, username)
+        )
+        if result:
+            return False, "Email or username already in use", None
+        
+        otp = self.otp_sender.generate_otp()
+        otp_hash = self.hash_otp(otp)
+        
+        success, message = self.otp_sender.send_otp_email(email, otp, username)
+        
+        try:
+            password_hash = self.hash_password(password)
+            self.db.execute("""
+                INSERT INTO registration_requests 
+                (email, username, password_hash, full_name, otp, otp_hash, created_at, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now', '+10 minutes'))
+            """, (email, username, password_hash, full_name, otp, otp_hash))
+            
+            return True, f"OTP sent to {email}. Valid for 10 minutes.", otp
+        except Exception as e:
+            return False, f"Registration request failed: {str(e)}", None
+    
+    def verify_otp_and_register(self, email, otp):
+        """Step 2: User provides OTP to verify email"""
+        otp_hash = self.hash_otp(otp)
+        result = self.db.fetchone("""
+            SELECT username, password_hash, full_name, expires_at
+            FROM registration_requests
+            WHERE email = ? AND otp_hash = ?
+        """, (email, otp_hash))
+        
+        if not result:
+            return False, "Invalid OTP"
+        
+        username, password_hash, full_name, expires_at = result
+        
+        expiry = datetime.fromisoformat(expires_at)
+        if datetime.now() > expiry:
+            self.db.execute("DELETE FROM registration_requests WHERE email = ?", (email,))
+            return False, "OTP expired. Please register again."
+        
+        try:
+            self.db.execute("""
+                INSERT INTO users 
+                (username, email, password_hash, full_name, role, is_verified, created_at, registration_date)
+                VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            """, (username, email, password_hash, full_name, "viewer", 1))
+            
+            self.db.execute("DELETE FROM registration_requests WHERE email = ?", (email,))
+            return True, "Registration successful! You can now login."
+        except Exception as e:
+            return False, f"Registration failed: {str(e)}"
+    
+    def resend_otp(self, email):
+        """Resend OTP to user email"""
+        result = self.db.fetchone(
+            "SELECT username FROM registration_requests WHERE email = ?",
+            (email,)
+        )
+        
+        if not result:
+            return False, "No pending registration found for this email"
+        
+        username = result[0]
+        otp = self.otp_sender.generate_otp()
+        otp_hash = self.hash_otp(otp)
+        
+        success, message = self.otp_sender.send_otp_email(email, otp, username)
+        
+        try:
+            self.db.execute("""
+                UPDATE registration_requests
+                SET otp = ?, otp_hash = ?, created_at = datetime('now'), expires_at = datetime('now', '+10 minutes')
+                WHERE email = ?
+            """, (otp, otp_hash, email))
+            
+            return True, "OTP resent successfully"
+        except Exception as e:
+            return False, f"Failed to resend OTP: {str(e)}"
+    
     def verify_user(self, username, password):
+        """Login with username and password"""
         pwd_hash = self.hash_password(password)
         result = self.db.fetchone("""
-            SELECT username, role FROM users 
+            SELECT username, role, is_verified FROM users 
             WHERE username = ? AND password_hash = ?
         """, (username, pwd_hash))
         
-        if result:
-            self.db.execute("UPDATE users SET last_login = datetime('now') WHERE username = ?", (username,))
-            return {"username": result[0], "role": result[1]}
-        return None
-    
-    def create_user(self, username, password, role="viewer"):
-        try:
-            pwd_hash = self.hash_password(password)
-            self.db.execute("""
-                INSERT INTO users (username, password_hash, role, created_at)
-                VALUES (?, ?, ?, datetime('now'))
-            """, (username, pwd_hash, role))
-            return True, "User created successfully"
-        except sqlite3.IntegrityError:
-            return False, "Username already exists"
-        except Exception as e:
-            return False, str(e)
+        if not result:
+            return None
+        
+        username, role, is_verified = result
+        
+        if not is_verified:
+            return None
+        
+        self.db.execute(
+            "UPDATE users SET last_login = datetime('now') WHERE username = ?",
+            (username,)
+        )
+        
+        return {"username": username, "role": role}
     
     def get_all_users(self):
+        """Get all verified users"""
         return self.db.fetchall("""
-            SELECT username, role, created_at, last_login FROM users
+            SELECT username, email, role, created_at, last_login FROM users
+            WHERE is_verified = 1
         """)
 
 # ==================== LOGGING ==================== #
@@ -175,6 +356,10 @@ if "last_search_results" not in st.session_state: st.session_state.last_search_r
 if "authenticated"       not in st.session_state: st.session_state.authenticated = False
 if "user"                not in st.session_state: st.session_state.user = None
 if "show_suggestions"    not in st.session_state: st.session_state.show_suggestions = True
+if "auth_stage"          not in st.session_state: st.session_state.auth_stage = "login"
+if "temp_email"          not in st.session_state: st.session_state.temp_email = ""
+if "temp_username"       not in st.session_state: st.session_state.temp_username = ""
+if "demo_otp"            not in st.session_state: st.session_state.demo_otp = None
 
 is_light = st.session_state.theme == "light"
 
@@ -303,11 +488,12 @@ def _css(T, is_light):
 
 st.markdown(_css(T, is_light), unsafe_allow_html=True)
 
-# ==================== AUTHENTICATION CHECK ==================== #
-auth_manager = AuthManager()
+# ==================== AUTHENTICATION ==================== #
+auth_manager = AuthManagerWithOTP()
 
-def show_login_page():
-    """Display login page"""
+def show_enhanced_login_page(auth_manager):
+    """Display enhanced login/registration page with OTP"""
+    
     st.markdown("""
     <div class="login-container">
         <div class="login-logo">👁️</div>
@@ -318,39 +504,141 @@ def show_login_page():
     
     with st.container():
         col1, col2, col3 = st.columns([1, 2, 1])
+        
         with col2:
-            st.markdown("### Sign In")
-            username = st.text_input("Username", placeholder="Enter username")
-            password = st.text_input("Password", type="password", placeholder="Enter password")
-            
-            col_a, col_b = st.columns(2)
-            with col_a:
-                if st.button("Login", use_container_width=True):
-                    if username and password:
-                        user = auth_manager.verify_user(username, password)
-                        if user:
-                            st.session_state.authenticated = True
-                            st.session_state.user = user
-                            st.success(f"Welcome, {user['username']}!")
-                            time.sleep(0.5)
-                            st.rerun()
+            # LOGIN TAB
+            if st.session_state.auth_stage == "login":
+                st.markdown("### Sign In")
+                
+                username = st.text_input("Username", placeholder="Enter username", key="login_user")
+                password = st.text_input("Password", type="password", placeholder="Enter password", key="login_pass")
+                
+                col_a, col_b, col_c = st.columns(3)
+                
+                with col_a:
+                    if st.button("Login", use_container_width=True):
+                        if username and password:
+                            user = auth_manager.verify_user(username, password)
+                            if user:
+                                st.session_state.authenticated = True
+                                st.session_state.user = user
+                                st.success(f"Welcome, {user['username']}!")
+                                time.sleep(0.5)
+                                st.rerun()
+                            else:
+                                st.error("Invalid credentials or email not verified")
                         else:
-                            st.error("Invalid credentials")
-                    else:
-                        st.warning("Please enter both username and password")
+                            st.warning("Please enter both username and password")
+                
+                with col_b:
+                    if st.button("Register", use_container_width=True):
+                        st.session_state.auth_stage = "register_step1"
+                        st.rerun()
+                
+                with col_c:
+                    if st.button("Guest", use_container_width=True):
+                        st.session_state.authenticated = True
+                        st.session_state.user = {"username": "guest", "role": "viewer"}
+                        st.rerun()
+                
+                st.markdown("---")
+                st.caption("📧 Demo: admin / admin123")
+                st.caption("❤️ Created by Team Human")
             
-            with col_b:
-                if st.button("Guest Access", use_container_width=True):
-                    st.session_state.authenticated = True
-                    st.session_state.user = {"username": "guest", "role": "viewer"}
-                    st.rerun()
+            # REGISTRATION STEP 1
+            elif st.session_state.auth_stage == "register_step1":
+                st.markdown("### Create Account")
+                
+                email = st.text_input("Email Address", placeholder="your.email@example.com", key="reg_email")
+                username = st.text_input("Username", placeholder="3+ characters", key="reg_user")
+                password = st.text_input("Password", type="password", placeholder="6+ characters", key="reg_pass")
+                password_confirm = st.text_input("Confirm Password", type="password", key="reg_pass_conf")
+                full_name = st.text_input("Full Name (optional)", key="reg_name")
+                
+                col_a, col_b = st.columns(2)
+                
+                with col_a:
+                    if st.button("Send OTP", use_container_width=True):
+                        if not email or '@' not in email:
+                            st.error("Invalid email address")
+                        elif len(username) < 3:
+                            st.error("Username must be at least 3 characters")
+                        elif len(password) < 6:
+                            st.error("Password must be at least 6 characters")
+                        elif password != password_confirm:
+                            st.error("Passwords don't match")
+                        else:
+                            success, message, otp = auth_manager.request_registration(
+                                email, username, password, full_name
+                            )
+                            
+                            if success:
+                                st.session_state.auth_stage = "register_step2"
+                                st.session_state.temp_email = email
+                                st.session_state.temp_username = username
+                                st.session_state.demo_otp = otp
+                                st.success(message)
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error(message)
+                
+                with col_b:
+                    if st.button("Back to Login", use_container_width=True):
+                        st.session_state.auth_stage = "login"
+                        st.rerun()
             
-            st.markdown("---")
-            st.caption("Default login: **admin** / **admin123**")
-            st.caption("Created by Team Human")
+            # REGISTRATION STEP 2: OTP Verification
+            elif st.session_state.auth_stage == "register_step2":
+                st.markdown("### Verify Email")
+                
+                st.info(f"📧 OTP sent to: {st.session_state.temp_email}")
+                
+                if st.session_state.demo_otp:
+                    st.warning(f"⏱️ Demo OTP: **{st.session_state.demo_otp}** (for testing)")
+                
+                otp = st.text_input("Enter 6-digit OTP", placeholder="000000", max_chars=6, key="otp_input")
+                
+                col_a, col_b, col_c = st.columns(3)
+                
+                with col_a:
+                    if st.button("Verify OTP", use_container_width=True):
+                        if len(otp) != 6:
+                            st.error("OTP must be 6 digits")
+                        else:
+                            success, message = auth_manager.verify_otp_and_register(
+                                st.session_state.temp_email, otp
+                            )
+                            
+                            if success:
+                                st.success(message)
+                                st.session_state.auth_stage = "login"
+                                st.session_state.demo_otp = None
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error(message)
+                
+                with col_b:
+                    if st.button("Resend OTP", use_container_width=True):
+                        success, message = auth_manager.resend_otp(st.session_state.temp_email)
+                        if success:
+                            st.success(message)
+                            success2, message2, otp = auth_manager.request_registration(
+                                st.session_state.temp_email, st.session_state.temp_username, "", ""
+                            )
+                            st.session_state.demo_otp = otp
+                        else:
+                            st.error(message)
+                
+                with col_c:
+                    if st.button("Cancel", use_container_width=True):
+                        st.session_state.auth_stage = "login"
+                        st.session_state.demo_otp = None
+                        st.rerun()
 
 if not st.session_state.authenticated:
-    show_login_page()
+    show_enhanced_login_page(auth_manager)
     st.stop()
 
 # ==================== METADATA DATABASE ==================== #
@@ -559,7 +847,6 @@ def score_bar(score):
             f'</div></div>')
 
 def analyze_image_quality(file_path):
-    """Analyze image quality metrics"""
     try:
         img = Image.open(file_path)
         quality_score = min(img.width * img.height / (1920 * 1080), 1.0)
@@ -574,7 +861,6 @@ def analyze_image_quality(file_path):
         return None
 
 def analyze_audio_quality(file_path):
-    """Analyze audio quality metrics"""
     try:
         y, sr = librosa.load(file_path, sr=None)
         rms = librosa.feature.rms(y=y)[0]
@@ -588,7 +874,6 @@ def analyze_audio_quality(file_path):
         return None
 
 def get_search_suggestions(analytics, query, limit=5):
-    """Get search suggestions based on history"""
     if not query or len(query) < 2:
         popular = analytics.get_popular_searches(limit)
         return [p[0] for p in popular]
@@ -672,13 +957,12 @@ class TrinetraEngine:
             with open(temp_path, "rb") as s, open(perm_path, "wb") as d:
                 d.write(s.read())
             
-            # Analyze quality
             if self.modality == "image":
                 quality_info = analyze_image_quality(perm_path)
                 quality_score = quality_info['quality_score'] if quality_info else 0.5
             else:
                 quality_info = analyze_audio_quality(perm_path)
-                quality_score = 0.7  # Default for audio
+                quality_score = 0.7
             
             emb       = self.get_embedding(file_path=perm_path)
             faiss_idx = self.index.ntotal
@@ -733,7 +1017,6 @@ class TrinetraEngine:
 
     def hybrid_search(self, text_query=None, file_path=None, top_k=5, 
                      filters=None, rerank=True):
-        """Enhanced search with filters and reranking"""
         if self.index.ntotal == 0: return [], 0
         
         t0 = time.time()
@@ -747,7 +1030,6 @@ class TrinetraEngine:
                     "Medium" if s > CONFIG.CONFIDENCE_MED else "Low")
             result = {**self.id_map[i], "score": float(s), "confidence": conf}
             
-            # Apply filters
             if filters:
                 if 'min_score' in filters and s < filters['min_score']:
                     continue
@@ -756,7 +1038,6 @@ class TrinetraEngine:
             
             out.append(result)
         
-        # Rerank by quality + recency
         if rerank:
             for r in out:
                 quality = r.get('quality', 0.5)
@@ -766,7 +1047,6 @@ class TrinetraEngine:
         return out[:top_k], (time.time() - t0) * 1000
 
     def search(self, file_path=None, text=None, top_k=5, metadata_filters=None):
-        """Standard search"""
         return self.hybrid_search(text_query=text, file_path=file_path, 
                                  top_k=top_k, filters=metadata_filters)
 
@@ -789,7 +1069,6 @@ class TrinetraEngine:
         return export_path
     
     def export_as_json(self):
-        """Export registry as JSON"""
         export_data = {
             "metadata": {
                 "export_date": datetime.now().isoformat(),
@@ -843,7 +1122,6 @@ analytics    = AnalyticsTracker()
 
 # ==================== SIDEBAR ==================== #
 with st.sidebar:
-    # User info
     user_role = st.session_state.user['role']
     st.markdown(f"""
     <div style="padding:0.5rem; background:{T['bg_card']}; border:1px solid {T['border']}; 
@@ -860,7 +1138,6 @@ with st.sidebar:
         st.session_state.user = None
         st.rerun()
 
-    # theme toggle
     cur_mode = T["mode_label"]
     st.markdown(f"""
     <div class="tog-pill">
@@ -875,7 +1152,6 @@ with st.sidebar:
 
     st.markdown('<hr style="border-color:rgba(255,255,255,0.08);margin:1rem 0">', unsafe_allow_html=True)
     
-    # Registration (only for admin/uploader)
     if user_role in ['admin', 'uploader']:
         st.markdown("### Asset Registration")
 
@@ -895,7 +1171,6 @@ with st.sidebar:
                                               else CONFIG.ALLOWED_AUDIO_EXTS)],
             )
             
-            # Preview
             if reg_file:
                 st.markdown("#### Preview")
                 if reg_mod == "image":
@@ -990,7 +1265,6 @@ with st.sidebar:
 
     st.markdown('<hr style="border-color:rgba(255,255,255,0.08);margin:1rem 0">', unsafe_allow_html=True)
     
-    # Export options
     if user_role in ['admin']:
         col1, col2 = st.columns(2)
         with col1:
@@ -1049,7 +1323,6 @@ def display_results(results, modality):
                 unsafe_allow_html=True,
             )
             
-            # Quality indicator
             if 'quality' in r:
                 quality = r['quality']
                 st.markdown(f"""
@@ -1066,7 +1339,6 @@ def display_results(results, modality):
             
             st.caption(f"Lang: {r.get('lang','—')} · {r.get('timestamp','')[:10]}")
             
-            # Rating and comments
             with st.expander("Feedback"):
                 avg_rating, count = image_engine.metadata_db.get_rating(r['id'])
                 st.write(f"Rating: {'⭐' * int(avg_rating)} ({count} votes)")
@@ -1115,7 +1387,6 @@ with tab_v:
     if mode == "Text Query":
         q = st.text_input("Describe the image", placeholder="e.g., a crowded temple at dusk", key="vq")
         
-        # Search suggestions
         if q and st.session_state.show_suggestions:
             suggestions = get_search_suggestions(analytics, q, limit=5)
             if suggestions:
@@ -1174,7 +1445,6 @@ with tab_a:
     
     q = st.text_input("Describe the sound", placeholder="e.g., tabla solo during rainstorm", key="aq")
     
-    # Suggestions
     if q and st.session_state.show_suggestions:
         suggestions = get_search_suggestions(analytics, q, limit=5)
         if suggestions:
@@ -1335,7 +1605,6 @@ with tab_admin:
     else:
         st.markdown("### User Management")
         
-        # Create new user
         with st.expander("Create New User"):
             new_user = st.text_input("Username", key="new_user")
             new_pass = st.text_input("Password", type="password", key="new_pass")
@@ -1348,10 +1617,9 @@ with tab_admin:
                 else:
                     st.warning("Please provide username and password")
         
-        # List users
         st.markdown("#### Current Users")
         users = auth_manager.get_all_users()
-        df_users = pd.DataFrame(users, columns=["Username", "Role", "Created", "Last Login"])
+        df_users = pd.DataFrame(users, columns=["Username", "Email", "Role", "Created", "Last Login"])
         st.dataframe(df_users, use_container_width=True, hide_index=True)
         
         st.markdown("---")
@@ -1362,7 +1630,6 @@ with tab_admin:
         col2.metric("Total Searches", stats[0] if stats else 0)
         col3.metric("Total Users", len(users))
         
-        # Popular searches
         st.markdown("#### Popular Searches (30 days)")
         popular = analytics.get_popular_searches(10)
         if popular:
@@ -1410,5 +1677,6 @@ st.markdown("""
     <p style='font-size: 0.8em;'>Multimodal embeddings • FAISS indexing • Cross-lingual search</p>
 </div>
 """, unsafe_allow_html=True)
+
 
 
