@@ -348,5 +348,6 @@ For detailed API documentation, see [DOCS.md](DOCS.md)
 ---
 
 **Version**: 5.0.0  
-**Last Updated**: 2024  
+**Last Updated**: 24/2/2026
 **Status**: Production Ready
+
