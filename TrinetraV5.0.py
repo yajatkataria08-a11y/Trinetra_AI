@@ -213,6 +213,16 @@ class AuthManagerWithOTP:
                 is_verified   INTEGER DEFAULT 0
             )
         """)
+        # Forgot-password reset tokens — only hash stored, expires in 10 min
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS password_reset_requests (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                email      TEXT NOT NULL,
+                otp_hash   TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL
+            )
+        """)
 
     def _create_default_admin(self):
         try:
@@ -233,7 +243,17 @@ class AuthManagerWithOTP:
     def hash_password(self, password):
         return generate_password_hash(password, method='pbkdf2:sha256', salt_length=16)
 
+    def _is_legacy_sha256(self, stored_hash):
+        """Detect old bare sha256 hashes — exactly 64 hex chars, no $ prefix."""
+        return len(stored_hash) == 64 and all(c in '0123456789abcdef' for c in stored_hash)
+
     def verify_password(self, stored_hash, password):
+        """
+        FIX: Dual-mode — works with both legacy sha256 (old DB) and new werkzeug PBKDF2.
+        This means existing users registered before this update can still log in.
+        """
+        if self._is_legacy_sha256(stored_hash):
+            return hashlib.sha256(password.encode()).hexdigest() == stored_hash
         return check_password_hash(stored_hash, password)
 
     def hash_otp(self, otp):
@@ -354,24 +374,37 @@ class AuthManagerWithOTP:
         """, (username,))
 
         if not result:
-            logger.warning(f"LOGIN_FAIL user={username} reason=not_found")  # FIX: log
+            logger.warning(f"LOGIN_FAIL user={username} reason=not_found")
             return None
 
         db_username, stored_hash, role, is_verified = result
 
-        # FIX: use werkzeug check_password_hash instead of comparing raw sha256
         if not self.verify_password(stored_hash, password):
-            logger.warning(f"LOGIN_FAIL user={username} reason=bad_password")  # FIX: log
+            logger.warning(f"LOGIN_FAIL user={username} reason=bad_password")
             return None
 
         if not is_verified:
-            logger.warning(f"LOGIN_FAIL user={username} reason=not_verified")  # FIX: log
+            logger.warning(f"LOGIN_FAIL user={username} reason=not_verified")
             return None
+
+        # FIX: If user had a legacy sha256 hash, silently upgrade it to PBKDF2 now.
+        # This means all old accounts get migrated the first time they log in —
+        # no manual DB migration needed.
+        if self._is_legacy_sha256(stored_hash):
+            new_hash = self.hash_password(password)
+            try:
+                self.db.execute(
+                    "UPDATE users SET password_hash = ? WHERE username = ?",
+                    (new_hash, db_username)
+                )
+                logger.info(f"HASH_UPGRADED user={db_username} old=sha256 new=pbkdf2")
+            except Exception as e:
+                logger.warning(f"Hash upgrade failed for {db_username}: {e}")
 
         self.db.execute(
             "UPDATE users SET last_login = datetime('now') WHERE username = ?", (username,)
         )
-        logger.info(f"LOGIN_SUCCESS user={username} role={role}")  # FIX: log success
+        logger.info(f"LOGIN_SUCCESS user={db_username} role={role}")
         return {"username": db_username, "role": role}
 
     def get_all_users(self):
@@ -393,10 +426,85 @@ class AuthManagerWithOTP:
                 (username, email, password_hash, role, is_verified, created_at, registration_date)
                 VALUES (?, ?, ?, ?, 1, datetime('now'), datetime('now'))
             """, (username, email or f"{username}@admin.local", pwd_hash, role))
-            logger.info(f"USER_CREATED user={username} role={role} by=admin")  # FIX: log
+            logger.info(f"USER_CREATED user={username} role={role} by=admin")
             return True, f"User '{username}' created successfully"
         except sqlite3.IntegrityError:
             return False, "Username or email already exists"
+
+    # ==================== FORGOT PASSWORD ==================== #
+
+    def request_password_reset(self, email):
+        """Step 1: user provides email — send OTP if account exists."""
+        result = self.db.fetchone(
+            "SELECT username FROM users WHERE email = ? AND is_verified = 1", (email,)
+        )
+        if not result:
+            # Don't reveal whether the email exists — security best practice
+            logger.warning(f"RESET_REQUEST_NOTFOUND email={email}")
+            return True, "If that email is registered, an OTP has been sent.", None
+
+        username = result[0]
+        otp      = self.otp_sender.generate_otp()
+        otp_hash = self.hash_otp(otp)
+
+        # Clear any previous reset requests for this email
+        self.db.execute("DELETE FROM password_reset_requests WHERE email = ?", (email,))
+
+        self.db.execute("""
+            INSERT INTO password_reset_requests (email, otp_hash, created_at, expires_at)
+            VALUES (?, ?, datetime('now'), datetime('now', '+10 minutes'))
+        """, (email, otp_hash))
+
+        self.otp_sender.send_otp_email(email, otp, username)
+        logger.info(f"RESET_REQUEST user={username} email={email}")
+
+        demo_otp = otp if os.getenv("DEBUG_MODE", "1") == "1" else None
+        return True, f"OTP sent to {email}. Valid for 10 minutes.", demo_otp
+
+    def verify_reset_otp(self, email, otp):
+        """Step 2: verify the OTP — returns (success, message)."""
+        otp_hash = self.hash_otp(otp)
+        result   = self.db.fetchone("""
+            SELECT expires_at FROM password_reset_requests
+            WHERE email = ? AND otp_hash = ?
+        """, (email, otp_hash))
+
+        if not result:
+            logger.warning(f"RESET_OTP_FAIL email={email} reason=invalid_otp")
+            return False, "Invalid OTP. Please try again."
+
+        expiry = datetime.fromisoformat(result[0])
+        if datetime.now() > expiry:
+            self.db.execute("DELETE FROM password_reset_requests WHERE email = ?", (email,))
+            logger.warning(f"RESET_OTP_FAIL email={email} reason=expired")
+            return False, "OTP expired. Please request a new one."
+
+        logger.info(f"RESET_OTP_OK email={email}")
+        return True, "OTP verified. Please set your new password."
+
+    def reset_password(self, email, otp, new_password):
+        """Step 3: verify OTP one final time and update the password."""
+        if len(new_password) < 6:
+            return False, "Password must be at least 6 characters."
+
+        # Re-verify OTP (guards against skipping step 2)
+        ok, msg = self.verify_reset_otp(email, otp)
+        if not ok:
+            return False, msg
+
+        new_hash = self.hash_password(new_password)
+        try:
+            self.db.execute(
+                "UPDATE users SET password_hash = ? WHERE email = ?",
+                (new_hash, email)
+            )
+            # Invalidate the reset token
+            self.db.execute("DELETE FROM password_reset_requests WHERE email = ?", (email,))
+            logger.info(f"RESET_SUCCESS email={email}")
+            return True, "Password updated successfully! You can now log in."
+        except Exception as e:
+            logger.error(f"RESET_DB_ERROR email={email}: {e}", exc_info=True)
+            return False, f"Failed to update password: {e}"
 
 
 # ==================== PAGE CONFIG ==================== #
@@ -418,6 +526,9 @@ if "auth_stage"          not in st.session_state: st.session_state.auth_stage = 
 if "temp_email"          not in st.session_state: st.session_state.temp_email = ""
 if "temp_username"       not in st.session_state: st.session_state.temp_username = ""
 if "demo_otp"            not in st.session_state: st.session_state.demo_otp = None
+if "reset_email"         not in st.session_state: st.session_state.reset_email = ""
+if "reset_otp"           not in st.session_state: st.session_state.reset_otp = ""
+if "reset_demo_otp"      not in st.session_state: st.session_state.reset_demo_otp = None
 
 is_light = st.session_state.theme == "light"
 
@@ -604,12 +715,128 @@ def show_enhanced_login_page(auth_manager):
                     if st.button("Guest", use_container_width=True):
                         st.session_state.authenticated = True
                         st.session_state.user = {"username": "guest", "role": "viewer"}
-                        logger.info("LOGIN_GUEST")  # FIX: log guest access
+                        logger.info("LOGIN_GUEST")
                         st.rerun()
 
                 st.markdown("---")
+                # Forgot password link sits naturally below the buttons
+                col_fp, _ = st.columns([1, 2])
+                with col_fp:
+                    if st.button("🔑 Forgot Password?", use_container_width=True, key="goto_fp"):
+                        st.session_state.auth_stage = "forgot_step1"
+                        st.rerun()
                 st.caption("📧 Demo: admin / admin123")
                 st.caption("❤️ Created by Team Human")
+
+            # ── FORGOT PASSWORD STEP 1: enter email ── #
+            elif st.session_state.auth_stage == "forgot_step1":
+                st.markdown("### Reset Password")
+                st.info("Enter the email address linked to your account and we'll send you an OTP.")
+
+                fp_email = st.text_input("Email Address", placeholder="your.email@example.com", key="fp_email")
+
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button("Send OTP", use_container_width=True, key="fp_send"):
+                        if not fp_email or '@' not in fp_email:
+                            st.error("Please enter a valid email address.")
+                        else:
+                            success, message, demo_otp = auth_manager.request_password_reset(fp_email)
+                            if success:
+                                st.session_state.reset_email    = fp_email
+                                st.session_state.reset_demo_otp = demo_otp
+                                st.session_state.auth_stage     = "forgot_step2"
+                                st.success(message)
+                                time.sleep(1)
+                                st.rerun()
+                            else:
+                                st.error(message)
+                with col_b:
+                    if st.button("Back to Login", use_container_width=True, key="fp_back1"):
+                        st.session_state.auth_stage = "login"
+                        st.rerun()
+
+            # ── FORGOT PASSWORD STEP 2: verify OTP ── #
+            elif st.session_state.auth_stage == "forgot_step2":
+                st.markdown("### Verify OTP")
+                st.info(f"📧 OTP sent to: **{st.session_state.reset_email}**")
+
+                if st.session_state.reset_demo_otp and os.getenv("DEBUG_MODE", "1") == "1":
+                    st.warning(f"⏱️ Debug OTP: **{st.session_state.reset_demo_otp}** (remove in prod)")
+
+                fp_otp = st.text_input("Enter 6-digit OTP", placeholder="000000", max_chars=6, key="fp_otp")
+
+                col_a, col_b, col_c = st.columns(3)
+                with col_a:
+                    if st.button("Verify OTP", use_container_width=True, key="fp_verify"):
+                        if len(fp_otp) != 6:
+                            st.error("OTP must be 6 digits.")
+                        else:
+                            ok, msg = auth_manager.verify_reset_otp(st.session_state.reset_email, fp_otp)
+                            if ok:
+                                st.session_state.reset_otp  = fp_otp   # carry verified OTP forward
+                                st.session_state.auth_stage = "forgot_step3"
+                                st.success(msg)
+                                time.sleep(0.8)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                with col_b:
+                    if st.button("Resend OTP", use_container_width=True, key="fp_resend"):
+                        ok, msg, new_demo = auth_manager.request_password_reset(st.session_state.reset_email)
+                        if ok:
+                            st.session_state.reset_demo_otp = new_demo
+                            st.success("New OTP sent!")
+                        else:
+                            st.error(msg)
+                with col_c:
+                    if st.button("Cancel", use_container_width=True, key="fp_cancel2"):
+                        st.session_state.auth_stage     = "login"
+                        st.session_state.reset_email    = ""
+                        st.session_state.reset_otp      = ""
+                        st.session_state.reset_demo_otp = None
+                        st.rerun()
+
+            # ── FORGOT PASSWORD STEP 3: set new password ── #
+            elif st.session_state.auth_stage == "forgot_step3":
+                st.markdown("### Set New Password")
+
+                new_pass  = st.text_input("New Password", type="password",
+                                          placeholder="At least 6 characters", key="fp_newpass")
+                new_pass2 = st.text_input("Confirm New Password", type="password",
+                                          placeholder="Repeat password", key="fp_newpass2")
+
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    if st.button("Update Password", use_container_width=True, key="fp_update"):
+                        if len(new_pass) < 6:
+                            st.error("Password must be at least 6 characters.")
+                        elif new_pass != new_pass2:
+                            st.error("Passwords don't match.")
+                        else:
+                            ok, msg = auth_manager.reset_password(
+                                st.session_state.reset_email,
+                                st.session_state.reset_otp,
+                                new_pass
+                            )
+                            if ok:
+                                st.success(msg)
+                                # Clear all reset state
+                                st.session_state.auth_stage     = "login"
+                                st.session_state.reset_email    = ""
+                                st.session_state.reset_otp      = ""
+                                st.session_state.reset_demo_otp = None
+                                time.sleep(2)
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                with col_b:
+                    if st.button("Cancel", use_container_width=True, key="fp_cancel3"):
+                        st.session_state.auth_stage     = "login"
+                        st.session_state.reset_email    = ""
+                        st.session_state.reset_otp      = ""
+                        st.session_state.reset_demo_otp = None
+                        st.rerun()
 
             elif st.session_state.auth_stage == "register_step1":
                 st.markdown("### Create Account")
@@ -1778,6 +2005,7 @@ st.markdown("""
     <p style='font-size: 0.8em;'>Multimodal embeddings • FAISS indexing • Cross-lingual search</p>
 </div>
 """, unsafe_allow_html=True)
+
 
 
 
