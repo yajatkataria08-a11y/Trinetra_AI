@@ -232,17 +232,16 @@ class AuthManagerWithOTP:
         """)
 
     def _create_default_admin(self):
+        admin_hash = self.hash_password("admin123")
         try:
-            admin_hash = self.hash_password("admin123")
             self.db.execute("""
-                INSERT INTO users
+                INSERT OR IGNORE INTO users
                 (username, email, password_hash, full_name, role, is_verified, created_at, registration_date)
                 VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
             """, ("admin", "admin@trinetra.local", admin_hash, "Administrator", "admin", 1))
-        except sqlite3.IntegrityError:
-            pass
-        except sqlite3.OperationalError as e:
-            logger.warning(f"_create_default_admin skipped (db busy): {e}")
+            logger.info("Default admin created or already exists")
+        except Exception as e:
+            logger.error(f"Failed to create default admin: {e}", exc_info=True))
 
     def hash_password(self, password):
         return generate_password_hash(password, method='pbkdf2:sha256', salt_length=16)
@@ -2416,88 +2415,99 @@ with tab_hist:
         if st.button("Clear History"):
             st.session_state.search_history = []; st.rerun()
 
-# ── Admin ── #
+# ── Admin ── 
 with tab_admin:
     if st.session_state.user.get('role') != 'admin':
         st.warning("Admin access only")
+        st.stop()
     else:
         st.markdown("### Admin Control Panel")
 
-        # Create user
+        # 1. Create user logic
         with st.expander("➕ Add New User"):
             col1, col2 = st.columns(2)
             with col1:
-                new_user = st.text_input("Username", key="new_u")
-                new_email = st.text_input("Email (optional)", key="new_e")
+                new_user = st.text_input("Username", key="new_u_final")
+                new_email = st.text_input("Email (optional)", key="new_e_final")
             with col2:
-                new_pass = st.text_input("Password", type="password", key="new_p")
-                new_role = st.selectbox("Role", ["viewer", "uploader", "admin"], key="new_r")
-            if st.button("Create", use_container_width=True):
+                new_pass = st.text_input("Password", type="password", key="new_p_final")
+                new_role = st.selectbox("Role", ["viewer", "uploader", "admin"], key="new_r_final")
+            if st.button("Create Account", use_container_width=True):
                 if new_user and new_pass:
                     ok, msg = auth_manager.create_user(new_user, new_pass, new_role, new_email)
-                    (st.success if ok else st.error)(msg)
-                    if ok: time.sleep(0.8); st.rerun()
-                else:
-                    st.warning("Username + password required")
+                    if ok: st.success(msg); time.sleep(0.8); st.rerun()
+                    else: st.error(msg)
 
-        # List & manage users
+        # 2. List & manage users (The Fix for the Empty Cards)
         st.subheader("Registered Users")
         users = auth_manager.get_all_users()
 
         if not users:
             st.info("No verified users yet.")
         else:
-            search = st.text_input("Filter (name/email/role)", "", key="usr_filter")
-            filtered = [u for u in users if search.lower() in " ".join(str(x or "").lower() for x in u)]
+            search = st.text_input("Filter Users", placeholder="Search by name, email, or role...", key="usr_filter_final")
+            filtered = [u for u in users if search.lower() in " ".join(map(str, u)).lower()]
 
             if not filtered:
-                st.info("No matches.")
+                st.info("No matches found.")
             else:
-                for row in filtered:
-                    # Safe column access
-                    username   = row[0] if len(row) > 0 else "—"
-                    email      = row[1] if len(row) > 1 else "—"
-                    role       = row[2] if len(row) > 2 else "—"
-                    created    = row[3] if len(row) > 3 else "—"
+                for i, row in enumerate(filtered):
+                    # SAFETY GATE: Prevents the "empty" white cards
+                    if not row or len(row) < 3: 
+                        continue
+                        
+                    username   = row[0]
+                    email      = row[1] if row[1] else "No email provided"
+                    role       = row[2]
+                    created    = row[3]
                     last_login = row[4] if len(row) > 4 else None
 
-                    cols = st.columns([3, 2, 2, 2])
-                    with cols[0]:
-                        st.markdown(f"**{username}**")
-                        st.caption(email)
-                    with cols[1]:
-                        st.caption(f"Role: {role}")
-                        st.caption(f"Joined: {created[:10] if created != '—' else '—'}")
-                    with cols[2]:
-                        if last_login:
-                            st.caption(f"Last seen: {last_login[:10]}")
-                        else:
-                            st.caption("Never")
-                    with cols[3]:
-                        is_self = username == st.session_state.user["username"]
-                        if role != "admin" and not is_self:
-                            if st.button("Promote", key=f"prom_{username}", use_container_width=True):
+                    # Styled Container
+                    st.markdown(f"""
+                        <div style="background:rgba(255,255,255,0.03); padding:15px; border-radius:10px; margin-bottom:5px; border-left:4px solid {T['accent']};">
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <div>
+                                    <span style="font-weight:bold; font-size:1.1rem; color:{T['text_primary']};">{username}</span><br>
+                                    <span style="font-size:0.8rem; color:{T['text_muted']};">{email}</span>
+                                </div>
+                                <div style="font-family:'JetBrains Mono'; background:{T['accent']}22; color:{T['accent']}; padding:4px 10px; border-radius:6px; font-size:0.75rem; font-weight:bold;">
+                                    {role.upper()}
+                                </div>
+                            </div>
+                        </div>
+                    """, unsafe_allow_html=True)
+
+                    # Action Buttons with Unique Keys
+                    c1, c2, c3, c4 = st.columns([1.5, 1.5, 1, 1])
+                    with c1: st.caption(f"📅 Joined: {created[:10]}")
+                    with c2: st.caption(f"👁️ Last: {last_login[:10] if last_login else 'Never'}")
+                    
+                    with c3:
+                        if role != "admin":
+                            if st.button("⏫ Promote", key=f"prom_{username}_{i}", use_container_width=True):
                                 auth_manager.db.execute("UPDATE users SET role='admin' WHERE username=?", (username,))
-                                st.success(f"{username} → Admin")
-                                time.sleep(0.8); st.rerun()
-                        if not is_self:
-                            if st.button("Delete", key=f"del_{username}", use_container_width=True):
-                                st.session_state[f"del_confirm_{username}"] = True
-                        if st.session_state.get(f"del_confirm_{username}", False):
-                            st.error(f"Delete {username} permanently?")
-                            cc1, cc2 = st.columns(2)
-                            if cc1.button("Yes", type="primary", key=f"yesdel_{username}"):
-                                auth_manager.db.execute("DELETE FROM users WHERE username=?", (username,))
-                                st.success(f"{username} deleted")
-                                st.session_state[f"del_confirm_{username}"] = False
-                                time.sleep(0.8); st.rerun()
-                            if cc2.button("No", key=f"noddel_{username}"):
-                                st.session_state[f"del_confirm_{username}"] = False
                                 st.rerun()
+                    
+                    with c4:
+                        is_self = username == st.session_state.user["username"]
+                        if st.button("🗑️ Delete", key=f"del_{username}_{i}", use_container_width=True, disabled=is_self):
+                            st.session_state[f"del_confirm_{username}"] = True
 
-                    st.markdown("---")
+                    # Confirmation logic inside the loop
+                    if st.session_state.get(f"del_confirm_{username}"):
+                        st.error(f"Confirm deletion of {username}?")
+                        cc1, cc2 = st.columns(2)
+                        if cc1.button("PURGE", key=f"y_del_{username}_{i}", use_container_width=True):
+                            auth_manager.db.execute("DELETE FROM users WHERE username=?", (username,))
+                            st.session_state[f"del_confirm_{username}"] = False
+                            st.rerun()
+                        if cc2.button("CANCEL", key=f"n_del_{username}_{i}", use_container_width=True):
+                            st.session_state[f"del_confirm_{username}"] = False
+                            st.rerun()
+                    
+                    st.markdown("<div style='margin-bottom:20px;'></div>", unsafe_allow_html=True)
 
-        # System Health
+        # 3. System Health Diagnostics
         with st.expander("🩺 System Health Diagnostics"):
             c1, c2, c3 = st.columns(3)
             c1.metric("Database", "Online" if auth_manager.db else "Offline")
@@ -2505,13 +2515,13 @@ with tab_admin:
             c3.metric("Storage", "Active" if os.path.exists(STORAGE_DIR) else "Error")
 
             if st.button("Test SMTP Connection"):
-                with st.spinner("Pinging smtp.gmail.com..."):
+                with st.spinner("Connecting..."):
                     try:
                         with smtplib.SMTP("smtp.gmail.com", 587, timeout=5) as s:
                             s.starttls()
-                            st.success("Gmail SMTP reachable!")
+                            st.success("Gmail SMTP is reachable and secrets are working!")
                     except Exception as e:
-                        st.error(f"Connection failed: {str(e)}\n(Check secrets/firewall/App Password)")
+                        st.error(f"Failed: {str(e)}")
 
 # ── Footer ── #
 st.markdown("---")
@@ -2522,6 +2532,7 @@ st.markdown("""
   <p style='font-size:0.8em;'>Multimodal embeddings · FAISS indexing · Cross-lingual search · Live web search</p>
 </div>
 """, unsafe_allow_html=True)
+
 
 
 
