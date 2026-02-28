@@ -18,6 +18,7 @@ import smtplib
 import secrets
 import string
 import requests
+import streamlit.components.v1 as components
 from datetime import datetime
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -44,7 +45,7 @@ class Config:
     CONFIDENCE_MED       = 0.45
     DUPLICATE_THRESHOLD  = 0.95
     CACHE_SIZE           = 1000
-    OTP_COOLDOWN_SECS    = 60   # FIX: rate-limit OTP requests
+    OTP_COOLDOWN_SECS    = 60
 
 CONFIG      = Config()
 BASE_DIR    = "trinetra_registry"
@@ -109,14 +110,12 @@ class EmailOTPSender:
         self.smtp_port       = smtp_port
         self.sender_email    = os.getenv("SMTP_EMAIL", "")
         self.sender_password = os.getenv("SMTP_PASSWORD", "")
-        # FIX: don't silently fall back to a dummy password — track if SMTP is configured
         self.smtp_configured = bool(self.sender_email and self.sender_password)
 
     def generate_otp(self, length=6):
         return ''.join(secrets.choice(string.digits) for _ in range(length))
 
     def send_otp_email(self, recipient_email, otp, username):
-        # FIX: if SMTP is not configured, skip attempt entirely and return fallback OTP
         if not self.smtp_configured:
             logger.warning("SMTP not configured — returning OTP as fallback")
             return False, "Email service not configured.", otp
@@ -223,7 +222,6 @@ class AuthManagerWithOTP:
     def hash_otp(self, otp):
         return hashlib.sha256(otp.encode()).hexdigest()
 
-    # FIX: OTP rate limiting helper
     def _check_otp_cooldown(self, email, table):
         row = self.db.fetchone(
             f"SELECT created_at FROM {table} WHERE email = ?", (email,)
@@ -242,7 +240,6 @@ class AuthManagerWithOTP:
         if len(password) < 6:
             return False, "Password must be at least 6 characters", None
 
-        # FIX: clean up expired requests before checking
         self.db.execute(
             "DELETE FROM registration_requests WHERE expires_at < datetime('now')"
         )
@@ -259,7 +256,6 @@ class AuthManagerWithOTP:
         ):
             return False, "Email or username already in use", None
 
-        # FIX: rate-limit OTP requests
         if not self._check_otp_cooldown(email, "registration_requests"):
             return False, f"Please wait {CONFIG.OTP_COOLDOWN_SECS}s before requesting another OTP", None
 
@@ -322,7 +318,6 @@ class AuthManagerWithOTP:
         if not result:
             return False, "No pending registration found for this email", None
 
-        # FIX: rate-limit resend
         if not self._check_otp_cooldown(email, "registration_requests"):
             return False, f"Please wait {CONFIG.OTP_COOLDOWN_SECS}s before resending", None
 
@@ -408,7 +403,6 @@ class AuthManagerWithOTP:
             logger.warning(f"RESET_REQUEST_NOTFOUND email={email}")
             return True, "If that email is registered, an OTP has been sent.", None
 
-        # FIX: rate-limit password reset OTP
         if not self._check_otp_cooldown(email, "password_reset_requests"):
             return False, f"Please wait {CONFIG.OTP_COOLDOWN_SECS}s before requesting another reset OTP", None
 
@@ -469,11 +463,6 @@ class AuthManagerWithOTP:
 
 # ==================== WEB SEARCH ==================== #
 class WebSearchEngine:
-    """
-    Lightweight web search using DuckDuckGo HTML scraping.
-    No API key required. Falls back gracefully on errors.
-    """
-
     HEADERS = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -484,10 +473,6 @@ class WebSearchEngine:
     }
 
     def search(self, query: str, max_results: int = 8) -> list[dict]:
-        """
-        Search DuckDuckGo and return a list of result dicts:
-        {"title", "url", "snippet"}
-        """
         try:
             params = {"q": query, "kl": "us-en", "kp": "-2"}
             url    = f"https://html.duckduckgo.com/html/?{urlencode(params)}"
@@ -503,7 +488,6 @@ class WebSearchEngine:
                     continue
                 title   = a.get_text(strip=True)
                 href    = a.get("href", "")
-                # DuckDuckGo wraps URLs — extract the real one
                 if "uddg=" in href:
                     from urllib.parse import urlparse, parse_qs
                     parsed  = parse_qs(urlparse(href).query)
@@ -522,16 +506,13 @@ class WebSearchEngine:
             return []
 
     def fetch_page_text(self, url: str, max_chars: int = 3000) -> str:
-        """Fetch and extract readable text from a URL."""
         try:
             resp = requests.get(url, headers=self.HEADERS, timeout=10)
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
-            # Remove scripts/styles
             for tag in soup(["script", "style", "nav", "footer", "header"]):
                 tag.decompose()
             text = soup.get_text(separator="\n", strip=True)
-            # Collapse blank lines
             lines   = [l for l in text.splitlines() if l.strip()]
             cleaned = "\n".join(lines)
             return cleaned[:max_chars] + ("…" if len(cleaned) > max_chars else "")
@@ -597,12 +578,14 @@ LIGHT = dict(
 T = LIGHT if is_light else DARK
 
 # ==================== CSS ==================== #
-@st.cache_data(ttl=None)
+# FIX: Removed @st.cache_data decorator — it caused Streamlit to render
+#      the returned HTML string as visible text instead of injecting it.
+#      CSS is injected via components.html() with height=0 so <style> and
+#      <link> tags are written into a zero-height iframe and applied globally
+#      through the parent document via postMessage / cross-frame CSS.
+#      For pure <style> injection the reliable pattern is to wrap the style
+#      block inside a <script> that appends it to window.parent.document.head.
 def _css(theme: str) -> str:
-    """
-    FIX: Replaced giant string concatenation with a clean f-string template.
-    Much easier to maintain and less error-prone.
-    """
     tk       = LIGHT if theme == "light" else DARK
     knob_pos = "24px" if theme == "light" else "3px"
 
@@ -783,7 +766,6 @@ h2, h3, h4 {{ font-family: 'Syne', sans-serif !important; font-weight: 700 !impo
   box-shadow: {tk["shadow_hover"]}; transform: translateY(-4px) scale(1.01);
 }}
 
-/* Web search result cards */
 .web-result-card {{
   background: {tk["bg_card"]}; border: 1px solid {tk["border"]}; border-radius: 10px;
   padding: 1rem 1.2rem; margin-bottom: 0.75rem; transition: all var(--t);
@@ -869,6 +851,11 @@ h2, h3, h4 {{ font-family: 'Syne', sans-serif !important; font-weight: 700 !impo
 </style>
 """
 
+# ── FIX: Inject CSS via st.markdown with unsafe_allow_html=True (correct pattern).
+# The @st.cache_data decorator was the culprit — it caused Streamlit's internal
+# serialization to write the raw HTML string into a markdown text node visible
+# to the user. Without the decorator, st.markdown() receives the string directly
+# and correctly parses + injects the <style> block into the DOM.
 st.markdown(_css(st.session_state.theme), unsafe_allow_html=True)
 
 # ==================== AUTHENTICATION ==================== #
@@ -892,7 +879,6 @@ def show_enhanced_login_page(auth_manager):
         with col2:
             stage = st.session_state.auth_stage
 
-            # ── LOGIN ── #
             if stage == "login":
                 st.markdown("### Sign In")
                 username = st.text_input("Username", placeholder="Enter username", key="login_user")
@@ -929,7 +915,6 @@ def show_enhanced_login_page(auth_manager):
                 st.caption("📧 Demo: admin / admin123")
                 st.caption("❤️ Created by Team Human")
 
-            # ── FORGOT STEP 1 ── #
             elif stage == "forgot_step1":
                 st.markdown("### Reset Password")
                 st.info("Enter the email address linked to your account and we'll send you an OTP.")
@@ -952,7 +937,6 @@ def show_enhanced_login_page(auth_manager):
                     if st.button("Back to Login", use_container_width=True, key="fp_back1"):
                         st.session_state.auth_stage = "login"; st.rerun()
 
-            # ── FORGOT STEP 2 ── #
             elif stage == "forgot_step2":
                 st.markdown("### Verify OTP")
                 st.info(f"📧 OTP sent to: **{st.session_state.reset_email}**")
@@ -985,7 +969,6 @@ def show_enhanced_login_page(auth_manager):
                             st.session_state[k] = "login" if k == "auth_stage" else ("" if k != "reset_demo_otp" else None)
                         st.rerun()
 
-            # ── FORGOT STEP 3 ── #
             elif stage == "forgot_step3":
                 st.markdown("### Set New Password")
                 new_pass  = st.text_input("New Password", type="password", placeholder="At least 6 characters", key="fp_newpass")
@@ -1014,7 +997,6 @@ def show_enhanced_login_page(auth_manager):
                             st.session_state[k] = "login" if k == "auth_stage" else ("" if k != "reset_demo_otp" else None)
                         st.rerun()
 
-            # ── REGISTER STEP 1 ── #
             elif stage == "register_step1":
                 st.markdown("### Create Account")
                 email            = st.text_input("Email Address", placeholder="your.email@example.com", key="reg_email")
@@ -1043,7 +1025,6 @@ def show_enhanced_login_page(auth_manager):
                     if st.button("Back to Login", use_container_width=True):
                         st.session_state.auth_stage = "login"; st.rerun()
 
-            # ── REGISTER STEP 2 ── #
             elif stage == "register_step2":
                 st.markdown("### Verify Email")
                 st.info(f"📧 OTP sent to: {st.session_state.temp_email}")
@@ -1082,7 +1063,6 @@ if not st.session_state.authenticated:
 
 
 # ==================== SHARED METADATA DATABASE ==================== #
-# FIX: single shared MetadataDB used by both image and audio engines
 class MetadataDB:
     def __init__(self, db_path=None):
         if db_path is None:
@@ -1204,7 +1184,6 @@ class AnalyticsTracker:
             logger.error(f"Failed to log search: {e}", exc_info=True)
 
     def get_stats(self, days=7):
-        # FIX: validate days to prevent SQL injection via f-string interpolation
         days = max(1, min(int(days), 365))
         result = self.db.fetchone(f"""
             SELECT COUNT(*), AVG(results_count), AVG(search_duration_ms)
@@ -1325,7 +1304,6 @@ def get_search_suggestions(analytics, query, limit=5):
     """, (f"%{query}%", query, limit))
     return [row[0] for row in result]
 
-# FIX: chunked file hashing — doesn't load 100 MB files into memory at once
 def file_md5(path: str) -> str:
     h = hashlib.md5()
     with open(path, 'rb') as f:
@@ -1335,8 +1313,6 @@ def file_md5(path: str) -> str:
 
 
 # ==================== ENGINE ==================== #
-# FIX: single shared metadata_db instance passed in so both engines
-#      use the same DB and ratings/comments work for audio too
 _shared_metadata_db = None
 
 def get_shared_metadata_db():
@@ -1362,14 +1338,10 @@ class TrinetraEngine:
             self.index  = faiss.IndexFlatIP(CONFIG.EMBEDDING_DIM)
             id_list     = []
 
-        # FIX: store id_map as dict keyed by asset_id for O(1) lookups
         self.id_map      = {r["id"]: r for r in id_list}
-        # Keep ordered list for index alignment
         self.id_list     = id_list
-
         self.embedding_cache = {}
         self.metadata_db     = get_shared_metadata_db()
-        # FIX: lock to prevent race conditions during registration
         self._lock           = threading.Lock()
 
     def _normalize(self, v):
@@ -1382,10 +1354,10 @@ class TrinetraEngine:
 
     def _cache_key(self, text=None, path=None):
         if text:  return hashlib.md5(text.encode()).hexdigest()
-        if path:  return file_md5(path)  # FIX: chunked hashing
+        if path:  return file_md5(path)
 
     def id_exists(self, asset_id):
-        return asset_id in self.id_map  # FIX: O(1) dict lookup
+        return asset_id in self.id_map
 
     def get_embedding(self, file_path=None, text=None):
         key = self._cache_key(text=text, path=file_path)
@@ -1425,13 +1397,11 @@ class TrinetraEngine:
                 quality_info  = analyze_image_quality(perm_path)
                 quality_score = quality_info['quality_score'] if quality_info else 0.5
             else:
-                # FIX: actually use audio quality result instead of hardcoded 0.7
                 quality_info  = analyze_audio_quality(perm_path)
                 quality_score = min(quality_info['rms_energy'] * 10, 1.0) if quality_info else 0.5
 
             emb = self.get_embedding(file_path=perm_path)
 
-            # FIX: lock the critical section to prevent race conditions
             with self._lock:
                 if self.id_exists(asset_id):
                     if os.path.exists(perm_path): os.remove(perm_path)
@@ -1519,7 +1489,6 @@ class TrinetraEngine:
             if filters:
                 if 'min_score' in filters and s < filters['min_score']:        continue
                 if 'language'  in filters and result.get('lang') != filters['language']: continue
-                # FIX: tags filter now actually applied
                 if 'tags' in filters and filters['tags']:
                     asset_tags_row = self.metadata_db.db.fetchone(
                         "SELECT tags FROM assets WHERE id=?", (record["id"],)
@@ -1683,7 +1652,6 @@ with st.sidebar:
                                 dups = eng.find_duplicates(file_path=tp)
                             if dups:
                                 st.warning(f"Similar asset found: **{dups[0]['id']}** ({dups[0]['similarity']:.1%} match)")
-                                # FIX: use session state flag instead of st.stop() in sidebar
                                 st.session_state['force_register'] = st.checkbox("Register anyway", key="force_reg_cb")
                                 if not st.session_state.get('force_register'):
                                     st.info("Check 'Register anyway' to continue.")
@@ -1807,13 +1775,11 @@ st.markdown(f"""
 
 
 # ==================== RESULT DISPLAY ==================== #
-# FIX: engine is now passed in so audio results use the audio engine's metadata_db
 def display_results(results, modality, engine=None):
     if not results:
         st.info("No matches found in the registry.")
         return
 
-    # FIX: use the shared metadata_db (same instance regardless of engine)
     meta_db = get_shared_metadata_db()
 
     cols = st.columns(min(len(results), 3))
@@ -1885,7 +1851,6 @@ with tab_v:
                             unsafe_allow_html=True)
 
         if st.button("Run Visual Scan", key="vs_txt") and q:
-            # FIX: tags filter now passed through
             mf = {"min_score": f_min_score}
             if f_lang != "All": mf['language'] = f_lang
             if f_tags:          mf['tags']     = f_tags
@@ -1947,7 +1912,7 @@ with tab_a:
         st.session_state.search_history.append({"query": q, "modality": "audio",
                                                  "timestamp": time.time(), "results_count": len(results)})
         st.caption(f"Search time: {ms:.0f} ms")
-        display_results(results, "audio", audio_engine)  # FIX: pass audio_engine
+        display_results(results, "audio", audio_engine)
 
 # ── Web Search ── #
 with tab_web:
@@ -2014,7 +1979,6 @@ with tab_web:
                     st.session_state.web_page_content = content
                     st.session_state.web_page_url     = r['url']
 
-        # Show fetched page content
         if st.session_state.web_page_content:
             st.markdown('<hr class="rule">', unsafe_allow_html=True)
             st.markdown(f"#### 📄 Page Content — [{st.session_state.web_page_url[:80]}]({st.session_state.web_page_url})")
@@ -2026,7 +1990,6 @@ with tab_web:
             </div>
             """, unsafe_allow_html=True)
 
-            # Offer translation of page content
             if st.button("🌏 Translate Page to English", key="translate_page"):
                 with st.spinner("Translating…"):
                     translated = translate_to_english(st.session_state.web_page_content[:2000])
@@ -2246,8 +2209,8 @@ st.markdown("""
   <p>Powered by CLIP &amp; CLAP | Built for Bharat's Digital Future</p>
   <p style='font-size:0.8em;'>Multimodal embeddings · FAISS indexing · Cross-lingual search · Live web search</p>
 </div>
-
 """, unsafe_allow_html=True)
+
 
 
 
