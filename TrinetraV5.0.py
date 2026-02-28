@@ -106,44 +106,77 @@ class DatabaseConnection:
 # ==================== EMAIL OTP SENDER ==================== #
 class EmailOTPSender:
     def __init__(self, smtp_server="smtp.gmail.com", smtp_port=587):
-        self.smtp_server     = smtp_server
-        self.smtp_port       = smtp_port
-        self.sender_email    = os.getenv("SMTP_EMAIL", "")
-        self.sender_password = os.getenv("SMTP_PASSWORD", "")
-        self.smtp_configured = bool(self.sender_email and self.sender_password)
+        self.smtp_server = smtp_server
+        self.smtp_port = smtp_port
+        self.sender_email = ""
+        self.sender_password = ""
+        self.smtp_configured = False
 
-    def generate_otp(self, length=6):
-        return ''.join(secrets.choice(string.digits) for _ in range(length))
+        # Priority 1: Streamlit Cloud secrets
+        try:
+            if "SMTP_EMAIL" in st.secrets and "SMTP_PASSWORD" in st.secrets:
+                email = str(st.secrets["SMTP_EMAIL"]).strip()
+                pwd = str(st.secrets["SMTP_PASSWORD"]).strip()
+                if email and pwd and "@" in email:
+                    self.sender_email = email
+                    self.sender_password = pwd
+                    self.smtp_configured = True
+                    logger.info("SMTP loaded from Streamlit secrets")
+                else:
+                    logger.warning("Secrets found but empty/invalid")
+        except Exception:
+            pass  # silent fail → go to env fallback
+
+        # Priority 2: Environment variables (local dev)
+        if not self.smtp_configured:
+            email = os.getenv("SMTP_EMAIL", "").strip()
+            pwd = os.getenv("SMTP_PASSWORD", "").strip()
+            if email and pwd and "@" in email:
+                self.sender_email = email
+                self.sender_password = pwd
+                self.smtp_configured = True
+                logger.info("SMTP loaded from environment variables")
+
+        if not self.smtp_configured:
+            logger.warning("No valid SMTP credentials anywhere")
+            st.warning(
+                "⚠️ Email/OTP sending disabled — no SMTP_EMAIL & SMTP_PASSWORD found.\n\n"
+                "• Cloud → add to Streamlit Secrets\n"
+                "• Local → set in .env or export\n"
+                "OTPs will show on screen until fixed."
+            )
 
     def send_otp_email(self, recipient_email, otp, username):
         if not self.smtp_configured:
-            logger.warning("SMTP not configured — returning OTP as fallback")
-            return False, "Email service not configured.", otp
+            msg = (
+                "⚠️ Email not configured.\n\n"
+                f"OTP for this session: **{otp}**\n\n"
+                "Copy it now — won't be shown again.\n"
+                "Fix: add SMTP_EMAIL + SMTP_PASSWORD (Gmail App Password if 2FA on)"
+            )
+            return False, msg, otp
 
         try:
             html_body = f"""
-            <html><body style="font-family:Arial,sans-serif;background:#f4f4f4;padding:20px;">
-              <div style="max-width:500px;margin:0 auto;background:#fff;padding:30px;
-                          border-radius:10px;box-shadow:0 2px 10px rgba(0,0,0,.1);">
-                <h2 style="color:#e8a020;text-align:center;">TRINETRA V5.0</h2>
-                <h3 style="color:#333;">Welcome, {username}!</h3>
-                <p style="color:#666;font-size:16px;">Your OTP for registration:</p>
-                <div style="background:#f0f0f0;padding:20px;border-radius:5px;
-                            text-align:center;margin:20px 0;">
-                  <h1 style="color:#e8a020;letter-spacing:5px;margin:0;">{otp}</h1>
+            <html><body style="font-family:sans-serif;padding:20px;background:#f8f9fa;">
+                <div style="max-width:500px;margin:auto;background:white;padding:30px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.1);">
+                    <h2 style="color:#e8a020;text-align:center;">Trinetra Verification</h2>
+                    <p>Hello {username},</p>
+                    <p>Your code is:</p>
+                    <h1 style="color:#e8a020;letter-spacing:8px;text-align:center;margin:20px 0;">{otp}</h1>
+                    <p style="color:#555;">Valid 10 minutes only.</p>
+                    <hr style="border:none;border-top:1px solid #eee;">
+                    <p style="font-size:0.9rem;color:#777;text-align:center;">
+                        Team Human | Bharat's Digital Future
+                    </p>
                 </div>
-                <p style="color:#666;"><strong>Valid for 10 minutes only.</strong></p>
-                <hr style="border:none;border-top:1px solid #ddd;margin:30px 0;">
-                <p style="color:#999;font-size:12px;text-align:center;">
-                  Team Human | Created with ❤️ for Bharat's Digital Future
-                </p>
-              </div>
             </body></html>
             """
-            message            = MIMEMultipart("alternative")
-            message["Subject"] = "Trinetra Registration - OTP Verification"
-            message["From"]    = self.sender_email
-            message["To"]      = recipient_email
+
+            message = MIMEMultipart("alternative")
+            message["Subject"] = "Trinetra – OTP Code"
+            message["From"] = f"Trinetra <{self.sender_email}>"
+            message["To"] = recipient_email
             message.attach(MIMEText(html_body, "html"))
 
             with smtplib.SMTP(self.smtp_server, self.smtp_port) as server:
@@ -151,11 +184,14 @@ class EmailOTPSender:
                 server.login(self.sender_email, self.sender_password)
                 server.sendmail(self.sender_email, recipient_email, message.as_string())
 
-            logger.info(f"OTP email sent to {recipient_email}")
-            return True, "OTP sent successfully", None
+            logger.info(f"OTP sent to {recipient_email}")
+            return True, "OTP sent — check inbox/spam", None
+
+        except smtplib.SMTPAuthenticationError:
+            return False, "Gmail login rejected (use **App Password** if 2FA on). OTP: **{otp}**", otp
         except Exception as e:
-            logger.warning(f"Email service unavailable for {recipient_email}: {e}")
-            return False, "Email service unavailable — your OTP is shown below.", otp
+            logger.error(f"SMTP fail: {str(e)}")
+            return False, f"Email failed ({str(e)}). OTP: **{otp}**", otp
 
 
 # ==================== AUTHENTICATION ==================== #
@@ -2382,132 +2418,100 @@ with tab_hist:
 
 # ── Admin ── #
 with tab_admin:
-    if user_role != 'admin':
-        st.warning("Admin access required")
+    if st.session_state.user.get('role') != 'admin':
+        st.warning("Admin access only")
     else:
-        st.markdown("### User Control Center")
+        st.markdown("### Admin Control Panel")
 
-        # ── Create user ──
-        with st.expander("➕ Create New User"):
-            new_user  = st.text_input("Username", key="new_user")
-            new_email = st.text_input("Email (optional)", key="new_email")
-            new_pass  = st.text_input("Password", type="password", key="new_pass")
-            new_role  = st.selectbox("Role", ["viewer", "uploader", "admin"], key="new_role")
-            if st.button("Create User"):
+        # Create user
+        with st.expander("➕ Add New User"):
+            col1, col2 = st.columns(2)
+            with col1:
+                new_user = st.text_input("Username", key="new_u")
+                new_email = st.text_input("Email (optional)", key="new_e")
+            with col2:
+                new_pass = st.text_input("Password", type="password", key="new_p")
+                new_role = st.selectbox("Role", ["viewer", "uploader", "admin"], key="new_r")
+            if st.button("Create", use_container_width=True):
                 if new_user and new_pass:
                     ok, msg = auth_manager.create_user(new_user, new_pass, new_role, new_email)
                     (st.success if ok else st.error)(msg)
+                    if ok: time.sleep(0.8); st.rerun()
                 else:
-                    st.warning("Please provide username and password")
+                    st.warning("Username + password required")
 
-        # ── Searchable user management ──
+        # List & manage users
+        st.subheader("Registered Users")
         users = auth_manager.get_all_users()
-        with st.expander("👥 Manage Users", expanded=True):
-            search_term   = st.text_input("Filter users",
-                                          placeholder="Search by name / email / role",
-                                          key="user_search")
-            filtered_users = [
-                u for u in users
-                if search_term.lower() in " ".join(map(str, u)).lower()
-            ]
 
-            if not filtered_users:
-                st.info("No matching users found.")
+        if not users:
+            st.info("No verified users yet.")
+        else:
+            search = st.text_input("Filter (name/email/role)", "", key="usr_filter")
+            filtered = [u for u in users if search.lower() in " ".join(str(x or "").lower() for x in u)]
+
+            if not filtered:
+                st.info("No matches.")
             else:
-                for u_row in filtered_users:
-                    u_name, u_email, u_role_row, u_created, u_login = u_row
-                    with st.container():
-                        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-                        with c1:
-                            st.markdown(f"**{u_name}**")
-                            st.caption(u_email)
-                        with c2:
-                            role_color = T["accent"] if u_role_row == "admin" else T["text_muted"]
-                            st.markdown(
-                                f"<span style='color:{role_color};"
-                                f"font-family:monospace;font-size:0.8rem;'>"
-                                f"[{u_role_row.upper()}]</span>",
-                                unsafe_allow_html=True,
-                            )
-                        with c3:
-                            if u_role_row != "admin":
-                                if st.button("⏫ Promote", key=f"prom_{u_name}",
-                                             use_container_width=True):
-                                    auth_manager.db.execute(
-                                        "UPDATE users SET role='admin' WHERE username=?",
-                                        (u_name,)
-                                    )
-                                    st.success(f"{u_name} promoted to admin!")
-                                    time.sleep(0.5); st.rerun()
-                            else:
-                                st.button("👑 Admin", key=f"is_adm_{u_name}",
-                                          disabled=True, use_container_width=True)
-                        with c4:
-                            is_self = u_name == st.session_state.user["username"]
-                            if st.button("🗑️ Delete", key=f"del_{u_name}",
-                                         use_container_width=True, disabled=is_self,
-                                         help="Cannot delete your own account"):
-                                st.session_state[f"confirm_del_{u_name}"] = True
+                for row in filtered:
+                    # Safe column access
+                    username   = row[0] if len(row) > 0 else "—"
+                    email      = row[1] if len(row) > 1 else "—"
+                    role       = row[2] if len(row) > 2 else "—"
+                    created    = row[3] if len(row) > 3 else "—"
+                    last_login = row[4] if len(row) > 4 else None
 
-                        # Two-step delete confirmation
-                        if st.session_state.get(f"confirm_del_{u_name}"):
-                            st.error(f"⚠️ Permanently delete **{u_name}**? This cannot be undone.")
+                    cols = st.columns([3, 2, 2, 2])
+                    with cols[0]:
+                        st.markdown(f"**{username}**")
+                        st.caption(email)
+                    with cols[1]:
+                        st.caption(f"Role: {role}")
+                        st.caption(f"Joined: {created[:10] if created != '—' else '—'}")
+                    with cols[2]:
+                        if last_login:
+                            st.caption(f"Last seen: {last_login[:10]}")
+                        else:
+                            st.caption("Never")
+                    with cols[3]:
+                        is_self = username == st.session_state.user["username"]
+                        if role != "admin" and not is_self:
+                            if st.button("Promote", key=f"prom_{username}", use_container_width=True):
+                                auth_manager.db.execute("UPDATE users SET role='admin' WHERE username=?", (username,))
+                                st.success(f"{username} → Admin")
+                                time.sleep(0.8); st.rerun()
+                        if not is_self:
+                            if st.button("Delete", key=f"del_{username}", use_container_width=True):
+                                st.session_state[f"del_confirm_{username}"] = True
+                        if st.session_state.get(f"del_confirm_{username}", False):
+                            st.error(f"Delete {username} permanently?")
                             cc1, cc2 = st.columns(2)
-                            if cc1.button("✅ YES, DELETE", key=f"y_{u_name}",
-                                          use_container_width=True):
-                                auth_manager.db.execute(
-                                    "DELETE FROM users WHERE username=?", (u_name,)
-                                )
-                                logger.info(
-                                    f"USER_DELETED username={u_name} "
-                                    f"by={st.session_state.user['username']}"
-                                )
-                                st.session_state[f"confirm_del_{u_name}"] = False
-                                st.rerun()
-                            if cc2.button("❌ CANCEL", key=f"n_{u_name}",
-                                          use_container_width=True):
-                                st.session_state[f"confirm_del_{u_name}"] = False
+                            if cc1.button("Yes", type="primary", key=f"yesdel_{username}"):
+                                auth_manager.db.execute("DELETE FROM users WHERE username=?", (username,))
+                                st.success(f"{username} deleted")
+                                st.session_state[f"del_confirm_{username}"] = False
+                                time.sleep(0.8); st.rerun()
+                            if cc2.button("No", key=f"noddel_{username}"):
+                                st.session_state[f"del_confirm_{username}"] = False
                                 st.rerun()
 
-                        st.markdown(
-                            '<hr style="border:none;border-top:1px solid '
-                            'rgba(255,255,255,0.05);margin:8px 0;">',
-                            unsafe_allow_html=True,
-                        )
+                    st.markdown("---")
 
-        # ── System stats ──
-        st.markdown("---")
-        st.markdown("### System Statistics")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Assets",   total)
-        col2.metric("Total Searches", stats[0] if stats else 0)
-        col3.metric("Total Users",    len(users))
+        # System Health
+        with st.expander("🩺 System Health Diagnostics"):
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Database", "Online" if auth_manager.db else "Offline")
+            c2.metric("SMTP", "Ready" if auth_manager.otp_sender.smtp_configured else "Disabled")
+            c3.metric("Storage", "Active" if os.path.exists(STORAGE_DIR) else "Error")
 
-        st.markdown("#### Popular Searches (30 days)")
-        popular = analytics.get_popular_searches(10)
-        if popular:
-            df_pop = pd.DataFrame(popular, columns=["Query", "Frequency"])
-            st.dataframe(df_pop, use_container_width=True, hide_index=True)
-
-# ── Comparison View ── #
-if len(st.session_state.last_search_results) >= 2:
-    with st.expander("Compare Results"):
-        st.markdown("### Side-by-Side Comparison")
-        ids = [r["id"] for r in st.session_state.last_search_results]
-        ca, cb = st.columns(2)
-        s1 = ca.selectbox("Result 1", ids, key="cmp1")
-        s2 = cb.selectbox("Result 2", ids, key="cmp2")
-        r1 = next(r for r in st.session_state.last_search_results if r["id"] == s1)
-        r2 = next(r for r in st.session_state.last_search_results if r["id"] == s2)
-        ca, cb = st.columns(2)
-        for col, r in [(ca, r1), (cb, r2)]:
-            with col:
-                if r.get("modality") == "image": st.image(r["path"], use_container_width=True)
-                else:                             st.audio(r["path"])
-                st.metric("Score", f"{r['score']:.2%}")
-                st.write(f"**ID:** {r['id']}")
-                st.write(f"**Lang:** {r.get('lang','—')}")
-                if 'quality' in r: st.write(f"**Quality:** {r['quality']:.1%}")
+            if st.button("Test SMTP Connection"):
+                with st.spinner("Pinging smtp.gmail.com..."):
+                    try:
+                        with smtplib.SMTP("smtp.gmail.com", 587, timeout=5) as s:
+                            s.starttls()
+                            st.success("Gmail SMTP reachable!")
+                    except Exception as e:
+                        st.error(f"Connection failed: {str(e)}\n(Check secrets/firewall/App Password)")
 
 # ── Footer ── #
 st.markdown("---")
@@ -2518,6 +2522,8 @@ st.markdown("""
   <p style='font-size:0.8em;'>Multimodal embeddings · FAISS indexing · Cross-lingual search · Live web search</p>
 </div>
 """, unsafe_allow_html=True)
+
+
 
 
 
