@@ -231,7 +231,7 @@ class AuthManagerWithOTP:
             )
         """)
 
-       def _create_default_admin(self):
+    def _create_default_admin(self):
         admin_hash = self.hash_password("admin123")
         try:
             self.db.execute("""
@@ -242,7 +242,6 @@ class AuthManagerWithOTP:
             logger.info("Default admin created or already exists")
         except Exception as e:
             logger.error(f"Failed to create default admin: {e}", exc_info=True)
-            
 
     def hash_password(self, password):
         return generate_password_hash(password, method='pbkdf2:sha256', salt_length=16)
