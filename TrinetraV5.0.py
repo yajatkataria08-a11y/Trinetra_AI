@@ -231,7 +231,7 @@ class AuthManagerWithOTP:
             )
         """)
 
-    def _create_default_admin(self):
+       def _create_default_admin(self):
         admin_hash = self.hash_password("admin123")
         try:
             self.db.execute("""
@@ -241,7 +241,8 @@ class AuthManagerWithOTP:
             """, ("admin", "admin@trinetra.local", admin_hash, "Administrator", "admin", 1))
             logger.info("Default admin created or already exists")
         except Exception as e:
-            logger.error(f"Failed to create default admin: {e}", exc_info=True))
+            logger.error(f"Failed to create default admin: {e}", exc_info=True)
+            
 
     def hash_password(self, password):
         return generate_password_hash(password, method='pbkdf2:sha256', salt_length=16)
@@ -2532,6 +2533,7 @@ st.markdown("""
   <p style='font-size:0.8em;'>Multimodal embeddings · FAISS indexing · Cross-lingual search · Live web search</p>
 </div>
 """, unsafe_allow_html=True)
+
 
 
 
