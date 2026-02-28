@@ -589,9 +589,35 @@ def _css(theme: str) -> str:
     tk       = LIGHT if theme == "light" else DARK
     knob_pos = "24px" if theme == "light" else "3px"
 
-    return f"""
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=JetBrains+Mono:wght@400;600&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+    # Returned as a self-contained HTML document injected into a zero-height
+    # iframe via components.html(). The <script> block writes both the Google
+    # Fonts <link> and our <style> directly into window.parent.document.head,
+    # so the styles apply to the main Streamlit page — not the iframe itself.
+    return f"""<!DOCTYPE html><html><head></head><body><script>
+(function() {{
+  var p = window.parent.document;
+
+  // ── Google Fonts ──
+  if (!p.getElementById('trinetra-fonts')) {{
+    var lp = p.createElement('link');
+    lp.id   = 'trinetra-fonts';
+    lp.rel  = 'preconnect';
+    lp.href = 'https://fonts.googleapis.com';
+    p.head.appendChild(lp);
+
+    var lf = p.createElement('link');
+    lf.id   = 'trinetra-font-face';
+    lf.rel  = 'stylesheet';
+    lf.href = 'https://fonts.googleapis.com/css2?family=Syne:wght@700;800&family=JetBrains+Mono:wght@400;600&family=DM+Sans:wght@400;500&display=swap';
+    p.head.appendChild(lf);
+  }}
+
+  // ── Theme CSS ──
+  var old = p.getElementById('trinetra-theme-css');
+  if (old) old.parentNode.removeChild(old);
+  var s = p.createElement('style');
+  s.id = 'trinetra-theme-css';
+  s.textContent = `
 <style>
 :root {{ --t: 0.25s; }}
 
@@ -848,15 +874,16 @@ h2, h3, h4 {{ font-family: 'Syne', sans-serif !important; font-weight: 700 !impo
 .a1 {{ animation: fadeUp 0.4s ease both; }}
 .a2 {{ animation: fadeUp 0.4s 0.08s ease both; }}
 .a3 {{ animation: fadeUp 0.4s 0.16s ease both; }}
-</style>
-"""
+  `;
+  p.head.appendChild(s);
+}})();
+</script></body></html>"""
 
-# ── FIX: Inject CSS via st.markdown with unsafe_allow_html=True (correct pattern).
-# The @st.cache_data decorator was the culprit — it caused Streamlit's internal
-# serialization to write the raw HTML string into a markdown text node visible
-# to the user. Without the decorator, st.markdown() receives the string directly
-# and correctly parses + injects the <style> block into the DOM.
-st.markdown(_css(st.session_state.theme), unsafe_allow_html=True)
+# ── Inject CSS into the parent Streamlit document via a zero-height iframe.
+# components.html() renders inside a sandboxed iframe; the <script> inside
+# writes our <style> tag into window.parent.document.head so it applies to
+# the main page. height=0 / scrolling=False keeps it completely invisible.
+components.html(_css(st.session_state.theme), height=0, scrolling=False)
 
 # ==================== AUTHENTICATION ==================== #
 @st.cache_resource
