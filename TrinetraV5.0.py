@@ -540,10 +540,10 @@ defaults = {
     "auth_stage": "login",
     "temp_email": "",
     "temp_username": "",
-    "demo_otp": None,
+    "demo_otp": None,          # cleared after first display
     "reset_email": "",
     "reset_otp": "",
-    "reset_demo_otp": None,
+    "reset_demo_otp": None,    # cleared after first display
     "web_search_results": [],
     "web_page_content": "",
     "web_page_url": "",
@@ -587,7 +587,7 @@ T = LIGHT if is_light else DARK
 #      block inside a <script> that appends it to window.parent.document.head.
 def _css(theme: str) -> str:
     tk       = LIGHT if theme == "light" else DARK
-    knob_pos = "24px" if theme == "light" else "3px"
+    knob_pos = "24px" if theme == "light" else "4px"
 
     return f"""
 <style>
@@ -790,17 +790,24 @@ h2, h3, h4 {{ font-family: 'Syne', sans-serif !important; font-weight: 700 !impo
 .sidebar-stat span {{ color: {tk["accent"]}; font-weight: 600; }}
 
 .tog-pill {{
-  display: flex; align-items: center; gap: 10px; background: {tk["bg_card"]};
-  border: 1px solid {tk["accent"]}; border-radius: 50px; padding: 8px 14px;
-  margin-bottom: 0.75rem; cursor: pointer; user-select: none;
-  transition: box-shadow var(--t), background var(--t);
+  display: flex; align-items: center; gap: 12px; background: {tk["bg_card"]};
+  border: 1px solid {tk["accent"]}; border-radius: 50px; padding: 6px 12px;
+  margin-bottom: 0.75rem; cursor: pointer; user-select: none; position: relative;
+  transition: all 0.4s cubic-bezier(0.23, 1, 0.32, 1);
 }}
-.tog-pill:hover {{ box-shadow: 0 0 14px {tk["accent_glow"]}; background: {tk["bg_card_hover"]}; }}
-.tog-track {{ position: relative; width: 44px; height: 22px; border-radius: 11px; background: {tk["border"]}; flex-shrink: 0; }}
+.tog-pill:hover {{
+  box-shadow: 0 0 15px {tk["accent_glow"]};
+  transform: translateY(-1px);
+}}
+.tog-track {{
+  position: relative; width: 44px; height: 22px;
+  border-radius: 20px; background: {tk["border"]}; flex-shrink: 0;
+}}
 .tog-knob {{
-  position: absolute; top: 2px; left: {knob_pos}; width: 16px; height: 16px;
-  border-radius: 50%; background: {tk["accent"]}; box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-  transition: left 0.3s cubic-bezier(0.34,1.56,0.64,1);
+  position: absolute; top: 3px; left: {knob_pos};
+  width: 16px; height: 16px; border-radius: 50%;
+  background: {tk["accent"]}; box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+  transition: left 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55), background 0.3s ease;
 }}
 .tog-icon {{ font-size: 1rem; line-height: 1; }}
 .tog-label {{
@@ -943,7 +950,8 @@ def show_enhanced_login_page(auth_manager):
                 st.markdown("### Verify OTP")
                 st.info(f"📧 OTP sent to: **{st.session_state.reset_email}**")
                 if st.session_state.reset_demo_otp:
-                    st.warning(f"📋 Email delivery failed. Your OTP: **{st.session_state.reset_demo_otp}** — valid for 10 minutes.")
+                    st.warning(f"📋 Email delivery failed. Your OTP: **{st.session_state.reset_demo_otp}** — valid for 10 minutes. Copy it now — it will not be shown again.")
+                    st.session_state.reset_demo_otp = None   # clear immediately after display
                 fp_otp = st.text_input("Enter 6-digit OTP", placeholder="000000", max_chars=6, key="fp_otp")
                 col_a, col_b, col_c = st.columns(3)
                 with col_a:
@@ -1031,7 +1039,8 @@ def show_enhanced_login_page(auth_manager):
                 st.markdown("### Verify Email")
                 st.info(f"📧 OTP sent to: {st.session_state.temp_email}")
                 if st.session_state.demo_otp:
-                    st.warning(f"📋 Email delivery failed. Your OTP: **{st.session_state.demo_otp}** — valid for 10 minutes.")
+                    st.warning(f"📋 Email delivery failed. Your OTP: **{st.session_state.demo_otp}** — valid for 10 minutes. Copy it now — it will not be shown again.")
+                    st.session_state.demo_otp = None   # clear immediately after display
                 otp = st.text_input("Enter 6-digit OTP", placeholder="000000", max_chars=6, key="otp_input")
                 col_a, col_b, col_c = st.columns(3)
                 with col_a:
@@ -1204,6 +1213,11 @@ class AnalyticsTracker:
 
 
 # ==================== MODELS ==================== #
+# Global inference lock — serialises all model forward passes so concurrent
+# Streamlit sessions cannot trigger simultaneous GPU kernel launches, which
+# causes VRAM OOM errors on single-GPU / shared-memory systems.
+_inference_lock = threading.Lock()
+
 @st.cache_resource(show_spinner="Loading neural models...")
 def load_models():
     dtype  = torch.float16 if DEVICE == "cuda" else torch.float32
@@ -1314,6 +1328,172 @@ def file_md5(path: str) -> str:
     return h.hexdigest()
 
 
+
+# ==================== NEURAL GROUNDING HELPERS ==================== #
+
+def generate_asset_description(result: dict, modality: str) -> str:
+    """Generate a natural-language description of an asset for web query building."""
+    asset_id = result.get("id", "").replace("_", " ")
+    lang     = result.get("lang", "en")
+    return (f"{asset_id} Indian {lang} image photo"
+            if modality == "image"
+            else f"{asset_id} Indian {lang} audio sound")
+
+
+def prefetch_web_pages(hits: list, storage: list) -> None:
+    """Background thread: fetch full page text for each web hit and store in-place."""
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/120.0.0.0 Safari/537.36"),
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    for i, hit in enumerate(hits):
+        try:
+            resp = requests.get(hit["url"], headers=headers, timeout=8)
+            resp.raise_for_status()
+            soup = BeautifulSoup(resp.text, "html.parser")
+            for tag in soup(["script", "style", "nav", "footer", "header"]):
+                tag.decompose()
+            text    = soup.get_text(separator="\n", strip=True)
+            lines   = [l for l in text.splitlines() if l.strip()]
+            storage[i] = {"url": hit["url"], "content": "\n".join(lines)[:5000]}
+        except Exception as e:
+            logger.warning(f"Prefetch failed for {hit['url']}: {e}")
+            storage[i] = {"url": hit["url"], "content": "Could not fetch page content."}
+
+
+def enrich_with_web(results: list, modality: str,
+                    max_web: int = 3, min_similarity: float = 0.45):
+    """Neural Grounding: fetch web results and filter by cosine similarity to top local asset."""
+    if not results:
+        return None
+    top  = results[0]
+    desc = generate_asset_description(top, modality)
+    lang = top.get("lang", "en")
+
+    # Build bilingual query for better cross-script recall
+    query_parts = [desc]
+    if lang != "en" and lang in CONFIG.SUPPORTED_LANGUAGES:
+        try:
+            native_desc = GoogleTranslator(source="en", target=lang).translate(desc)
+            query_parts.append(f'"{native_desc}"')
+        except Exception:
+            pass
+    web_query = f"{' OR '.join(query_parts)} India"
+
+    with st.spinner(f"Neural Grounding: searching web for \"{desc}\"\u2026"):
+        web_hits = web_search.search(web_query, max_results=max_web * 3)
+    if not web_hits:
+        return None
+
+    # Embed the local file, then score each snippet against it
+    eng       = image_engine if modality == "image" else audio_engine
+    local_emb = eng.get_embedding(file_path=top["path"])
+
+    filtered = []
+    for hit in web_hits:
+        if not hit.get("snippet"):
+            continue
+        # CLIP text encoder — works for both image & audio modalities
+        snip_emb = image_engine.get_embedding(text=hit["snippet"])
+        sim      = float(np.dot(local_emb, snip_emb) /
+                         (np.linalg.norm(local_emb) * np.linalg.norm(snip_emb) + 1e-9))
+        if sim >= min_similarity:
+            hit["grounding_score"] = sim
+            filtered.append(hit)
+
+    return {
+        "query_used":     web_query,
+        "desc_generated": desc,
+        "hits": sorted(filtered, key=lambda x: x["grounding_score"], reverse=True)[:max_web],
+    }
+
+
+def render_enrichment_ui(results: list, modality: str) -> None:
+    """Render the 'Enrich with Web Context' Neural Grounding panel below search results."""
+    if not results:
+        return
+    st.markdown("---")
+    min_web_sim = st.slider(
+        "Neural Grounding Sensitivity", 0.3, 0.7, 0.45, 0.05,
+        help="How strictly should web snippets match your local asset? Lower = more (looser) results.",
+        key=f"ground_slider_{modality}",
+    )
+    if st.button("\U0001f310 Enrich with Web Context",
+                 use_container_width=True, key=f"enr_btn_{modality}"):
+        enrichment = enrich_with_web(results, modality, min_similarity=min_web_sim)
+
+        if enrichment and enrichment["hits"]:
+            top  = results[0]
+            hits = enrichment["hits"]
+            st.success(f"Grounded {len(hits)} web result(s) for **{top['id']}**")
+            st.caption(f"Query used: `{enrichment['query_used']}`")
+
+            # Background prefetch of full page text
+            prefetch_storage = [None] * len(hits)
+            bg = threading.Thread(target=prefetch_web_pages, args=(hits, prefetch_storage))
+            bg.daemon = True
+            bg.start()
+
+            for i, hit in enumerate(hits):
+                gs    = hit.get("grounding_score", 0)
+                color = "#2ecc71" if gs > 0.6 else "#f39c12" if gs > 0.45 else "#e74c3c"
+
+                # Optionally translate snippet for non-English assets
+                snippet_display = hit["snippet"]
+                if top.get("lang", "en") != "en":
+                    try:
+                        snippet_display = GoogleTranslator(
+                            source="auto", target="en"
+                        ).translate(hit["snippet"][:500])
+                        st.caption(f"Snippet auto-translated from {top['lang'].upper()}")
+                    except Exception:
+                        pass
+
+                st.markdown(f"""
+                <div class="web-result-card">
+                    <div class="web-result-title">{i+1}. {hit['title']}</div>
+                    <div class="web-result-url">\U0001f517
+                        <a href="{hit['url']}" target="_blank" style="color:#2ecc71;">
+                            {hit['url'][:70]}\u2026
+                        </a>
+                    </div>
+                    <div class="web-result-snippet">{snippet_display}</div>
+                    <div style="font-size:0.75rem; color:{color};
+                                font-family:'JetBrains Mono',monospace;
+                                margin-top:8px; font-weight:600;">
+                        \u25cf Neural Grounding Score: {gs:.3f}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.markdown(
+                        f'<a href="{hit["url"]}" target="_blank" ' +
+                        f'style="color:{T["accent"]};font-size:0.8rem;">\u2197 Open in browser</a>',
+                        unsafe_allow_html=True,
+                    )
+                with c2:
+                    if st.button("\U0001f4c4 Read full page",
+                                 key=f"read_enr_{modality}_{i}",
+                                 use_container_width=True):
+                        time.sleep(0.4)  # give prefetch a head-start
+                        if prefetch_storage[i]:
+                            st.text_area("Full Page Content",
+                                         prefetch_storage[i]["content"],
+                                         height=250,
+                                         key=f"page_content_{modality}_{i}")
+                        else:
+                            st.info("Still fetching — try again in a moment.")
+        else:
+            st.warning(
+                "No web results met the grounding threshold. "
+                "Try lowering the slider or searching for a more widely-known asset."
+            )
+
+
 # ==================== ENGINE ==================== #
 _shared_metadata_db = None
 
@@ -1345,6 +1525,45 @@ class TrinetraEngine:
         self.embedding_cache = {}
         self.metadata_db     = get_shared_metadata_db()
         self._lock           = threading.Lock()
+        self._validate_sync()   # FIX: detect index/map divergence at startup
+
+    def _validate_sync(self):
+        """Detect and log divergence between FAISS index and id_map.
+        FAISS vectors cannot be deleted, so if ntotal > len(id_map) it means
+        a previous crash left orphaned vectors. We rebuild the index from the
+        stored id_map to restore consistency.
+        """
+        n_idx  = self.index.ntotal
+        n_map  = len(self.id_list)
+        if n_idx == n_map:
+            return  # all good
+        logger.warning(
+            f"SYNC_MISMATCH modality={self.modality} "
+            f"faiss_ntotal={n_idx} id_map_len={n_map} — rebuilding index"
+        )
+        # Rebuild: re-embed only the assets listed in id_map
+        new_index = faiss.IndexHNSWFlat(CONFIG.EMBEDDING_DIM, CONFIG.HNSW_M)
+        new_index.hnsw.efConstruction = CONFIG.HNSW_EF_CONSTRUCTION
+        new_index.hnsw.efSearch       = CONFIG.HNSW_EF_SEARCH
+        rebuilt, failed = [], []
+        for record in self.id_list:
+            if not os.path.exists(record["path"]):
+                failed.append(record["id"]); continue
+            try:
+                emb = self._compute_embedding(file_path=record["path"])
+                new_index.add(emb.reshape(1, -1))
+                rebuilt.append(record)
+            except Exception as e:
+                logger.error(f"SYNC_REBUILD_FAIL id={record['id']}: {e}")
+                failed.append(record["id"])
+        self.index   = new_index
+        self.id_list = rebuilt
+        self.id_map  = {r["id"]: r for r in rebuilt}
+        self._save()
+        logger.info(
+            f"SYNC_REBUILD_DONE modality={self.modality} "
+            f"rebuilt={len(rebuilt)} dropped={len(failed)}"
+        )
 
     def _normalize(self, v):
         return (v / (np.linalg.norm(v) + 1e-9)).astype("float32")
@@ -1547,35 +1766,37 @@ class TrinetraEngine:
 class ImageEngine(TrinetraEngine):
     def __init__(self): super().__init__("image")
     def _compute_embedding(self, file_path=None, text=None):
-        with torch.no_grad():
-            if text:
-                inp = clip_processor(text=[text], return_tensors="pt", padding=True).to(DEVICE)
-                if DEVICE == "cuda": inp = fp16(inp)
-                e = clip_model.get_text_features(**inp)
-            else:
-                ok, msg = validate_image_content(file_path)
-                if not ok: raise ValueError(msg)
-                img = Image.open(file_path).convert("RGB")
-                inp = clip_processor(images=img, return_tensors="pt").to(DEVICE)
-                if DEVICE == "cuda": inp = fp16(inp)
-                e = clip_model.get_image_features(**inp)
+        with _inference_lock:          # prevent concurrent VRAM OOM
+            with torch.no_grad():
+                if text:
+                    inp = clip_processor(text=[text], return_tensors="pt", padding=True).to(DEVICE)
+                    if DEVICE == "cuda": inp = fp16(inp)
+                    e = clip_model.get_text_features(**inp)
+                else:
+                    ok, msg = validate_image_content(file_path)
+                    if not ok: raise ValueError(msg)
+                    img = Image.open(file_path).convert("RGB")
+                    inp = clip_processor(images=img, return_tensors="pt").to(DEVICE)
+                    if DEVICE == "cuda": inp = fp16(inp)
+                    e = clip_model.get_image_features(**inp)
         return self._normalize(e.cpu().float().numpy().flatten())
 
 
 class AudioEngine(TrinetraEngine):
     def __init__(self): super().__init__("audio")
     def _compute_embedding(self, file_path=None, text=None):
-        with torch.no_grad():
-            if text:
-                inp = clap_processor(text=[text], return_tensors="pt").to(DEVICE)
-                e   = clap_model.get_text_features(**inp)
-            else:
-                y, _ = librosa.load(file_path, sr=CONFIG.AUDIO_SAMPLE_RATE,
-                                    duration=CONFIG.AUDIO_DURATION_S)
-                if not is_audio_valid(y): raise ValueError("Audio appears silent")
-                inp = clap_processor(audios=y, sampling_rate=CONFIG.AUDIO_SAMPLE_RATE,
-                                     return_tensors="pt").to(DEVICE)
-                e   = clap_model.get_audio_features(**inp)
+        with _inference_lock:          # prevent concurrent VRAM OOM
+            with torch.no_grad():
+                if text:
+                    inp = clap_processor(text=[text], return_tensors="pt").to(DEVICE)
+                    e   = clap_model.get_text_features(**inp)
+                else:
+                    y, _ = librosa.load(file_path, sr=CONFIG.AUDIO_SAMPLE_RATE,
+                                        duration=CONFIG.AUDIO_DURATION_S)
+                    if not is_audio_valid(y): raise ValueError("Audio appears silent")
+                    inp = clap_processor(audios=y, sampling_rate=CONFIG.AUDIO_SAMPLE_RATE,
+                                         return_tensors="pt").to(DEVICE)
+                    e   = clap_model.get_audio_features(**inp)
         return self._normalize(e.cpu().float().numpy().flatten())
 
 
@@ -1719,7 +1940,7 @@ with st.sidebar:
     <div class="sidebar-stat">Images <span>{image_engine.index.ntotal}</span></div>
     <div class="sidebar-stat">Audio  <span>{audio_engine.index.ntotal}</span></div>
     <div class="sidebar-stat">Device <span>{DEVICE.upper()}</span></div>
-    <div class="sidebar-stat">Index  <span>FAISS FlatIP</span></div>
+    <div class="sidebar-stat">Index  <span>FAISS HNSW</span></div>
     """, unsafe_allow_html=True)
 
     stats = analytics.get_stats(7)
@@ -1886,6 +2107,12 @@ with tab_v:
             finally:
                 if os.path.exists(qp): os.remove(qp)
 
+    # ── Neural Grounding panel (Visual Search) ──
+    render_enrichment_ui(
+        results if 'results' in dir() else st.session_state.last_search_results,
+        "image"
+    )
+
 # ── Acoustic Search ── #
 with tab_a:
     with st.expander("Advanced Filters"):
@@ -1915,6 +2142,12 @@ with tab_a:
                                                  "timestamp": time.time(), "results_count": len(results)})
         st.caption(f"Search time: {ms:.0f} ms")
         display_results(results, "audio", audio_engine)
+
+    # ── Neural Grounding panel (Acoustic Search) ──
+    render_enrichment_ui(
+        results if 'results' in dir() else st.session_state.last_search_results,
+        "audio"
+    )
 
 # ── Web Search ── #
 with tab_web:
@@ -2065,7 +2298,7 @@ with tab_aud:
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Vectors",   eng.index.ntotal)
-    c2.metric("Index",     "FAISS FlatIP")
+    c2.metric("Index",     "FAISS HNSW")
     c3.metric("Embed Dim", CONFIG.EMBEDDING_DIM)
     c4.metric("Cache",     len(eng.embedding_cache))
     st.markdown('<hr class="rule">', unsafe_allow_html=True)
@@ -2152,8 +2385,10 @@ with tab_admin:
     if user_role != 'admin':
         st.warning("Admin access required")
     else:
-        st.markdown("### User Management")
-        with st.expander("Create New User"):
+        st.markdown("### User Control Center")
+
+        # ── Create user ──
+        with st.expander("➕ Create New User"):
             new_user  = st.text_input("Username", key="new_user")
             new_email = st.text_input("Email (optional)", key="new_email")
             new_pass  = st.text_input("Password", type="password", key="new_pass")
@@ -2165,11 +2400,82 @@ with tab_admin:
                 else:
                     st.warning("Please provide username and password")
 
-        st.markdown("#### Current Users")
-        users    = auth_manager.get_all_users()
-        df_users = pd.DataFrame(users, columns=["Username", "Email", "Role", "Created", "Last Login"])
-        st.dataframe(df_users, use_container_width=True, hide_index=True)
+        # ── Searchable user management ──
+        users = auth_manager.get_all_users()
+        with st.expander("👥 Manage Users", expanded=True):
+            search_term   = st.text_input("Filter users",
+                                          placeholder="Search by name / email / role",
+                                          key="user_search")
+            filtered_users = [
+                u for u in users
+                if search_term.lower() in " ".join(map(str, u)).lower()
+            ]
 
+            if not filtered_users:
+                st.info("No matching users found.")
+            else:
+                for u_row in filtered_users:
+                    u_name, u_email, u_role_row, u_created, u_login = u_row
+                    with st.container():
+                        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
+                        with c1:
+                            st.markdown(f"**{u_name}**")
+                            st.caption(u_email)
+                        with c2:
+                            role_color = T["accent"] if u_role_row == "admin" else T["text_muted"]
+                            st.markdown(
+                                f"<span style='color:{role_color};"
+                                f"font-family:monospace;font-size:0.8rem;'>"
+                                f"[{u_role_row.upper()}]</span>",
+                                unsafe_allow_html=True,
+                            )
+                        with c3:
+                            if u_role_row != "admin":
+                                if st.button("⏫ Promote", key=f"prom_{u_name}",
+                                             use_container_width=True):
+                                    auth_manager.db.execute(
+                                        "UPDATE users SET role='admin' WHERE username=?",
+                                        (u_name,)
+                                    )
+                                    st.success(f"{u_name} promoted to admin!")
+                                    time.sleep(0.5); st.rerun()
+                            else:
+                                st.button("👑 Admin", key=f"is_adm_{u_name}",
+                                          disabled=True, use_container_width=True)
+                        with c4:
+                            is_self = u_name == st.session_state.user["username"]
+                            if st.button("🗑️ Delete", key=f"del_{u_name}",
+                                         use_container_width=True, disabled=is_self,
+                                         help="Cannot delete your own account"):
+                                st.session_state[f"confirm_del_{u_name}"] = True
+
+                        # Two-step delete confirmation
+                        if st.session_state.get(f"confirm_del_{u_name}"):
+                            st.error(f"⚠️ Permanently delete **{u_name}**? This cannot be undone.")
+                            cc1, cc2 = st.columns(2)
+                            if cc1.button("✅ YES, DELETE", key=f"y_{u_name}",
+                                          use_container_width=True):
+                                auth_manager.db.execute(
+                                    "DELETE FROM users WHERE username=?", (u_name,)
+                                )
+                                logger.info(
+                                    f"USER_DELETED username={u_name} "
+                                    f"by={st.session_state.user['username']}"
+                                )
+                                st.session_state[f"confirm_del_{u_name}"] = False
+                                st.rerun()
+                            if cc2.button("❌ CANCEL", key=f"n_{u_name}",
+                                          use_container_width=True):
+                                st.session_state[f"confirm_del_{u_name}"] = False
+                                st.rerun()
+
+                        st.markdown(
+                            '<hr style="border:none;border-top:1px solid '
+                            'rgba(255,255,255,0.05);margin:8px 0;">',
+                            unsafe_allow_html=True,
+                        )
+
+        # ── System stats ──
         st.markdown("---")
         st.markdown("### System Statistics")
         col1, col2, col3 = st.columns(3)
@@ -2212,6 +2518,7 @@ st.markdown("""
   <p style='font-size:0.8em;'>Multimodal embeddings · FAISS indexing · Cross-lingual search · Live web search</p>
 </div>
 """, unsafe_allow_html=True)
+
 
 
 
