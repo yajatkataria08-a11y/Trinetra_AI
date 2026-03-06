@@ -1,359 +1,254 @@
-# 👁️ Trinetra V5.0 - Multimodal Neural Registry
-[<image-card alt="Python" src="https://img.shields.io/badge/Python-3.8%2B-blue" ></image-card>](https://www.python.org/)
-[<image-card alt="Streamlit" src="https://img.shields.io/badge/Streamlit-1.0+-FF4B4B" ></image-card>](https://streamlit.io/)
-[<image-card alt="FAISS" src="https://img.shields.io/badge/FAISS-Facebook%20AI-green" ></image-card>](https://github.com/facebookresearch/faiss)
-[<image-card alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg" ></image-card>](https://opensource.org/licenses/MIT)
-[<image-card alt="Stars" src="https://img.shields.io/github/stars/yajatkataria08-a11y/Trinetra_AI?style=social" ></image-card>](https://github.com/yajatkataria08-a11y/Trinetra_AI)
+# 🔱 Trinetra AI — Multimodal Intelligence Engine
 
-## Overview
-Trinetra V5.0 is an advanced AI-powered multimodal asset registry system built for Bharat's digital infrastructure. It uses state-of-the-art neural embeddings (CLIP for images, CLAP for audio) with FAISS indexing for lightning-fast similarity search.
+**Trinetra AI** is a multimodal AI system designed to analyze and search across **text, images, and web data** using modern AI infrastructure.
 
-## 🆕 What's New in V5.0
+It combines **AWS services, multimodal embeddings, web intelligence, and AI pipelines** into a unified system capable of intelligent search and content analysis.
 
-### 1. **Authentication System**
-- Secure login with password hashing (SHA-256)
-- Role-based access control (Admin, Uploader, Viewer)
-- Default credentials: `admin` / `admin123`
-- Guest access option for quick demos
-- User management dashboard for admins
+The goal of Trinetra is to move toward **next-generation AI assistants that can understand multiple forms of information simultaneously**.
 
-### 2. **Quality Analysis**
-- Automatic quality scoring for uploaded assets
-- Image quality metrics (resolution, sharpness)
-- Audio quality metrics (RMS energy, sample rate)
-- Quality indicators displayed with search results
+---
 
-### 3. **Smart Search Suggestions**
-- Real-time search suggestions based on history
-- Popular searches display
-- Query autocomplete functionality
-- Context-aware recommendations
+# 🚀 Features
 
-### 4. **Asset Clustering**
-- K-means clustering visualization
-- Group similar assets automatically
-- Interactive cluster exploration
-- Configurable cluster count (2-10)
+• Multimodal AI architecture
+• Reverse image search using AWS Rekognition
+• Web intelligence engine using DuckDuckGo scraping
+• Lambda-based ingestion pipeline
+• DynamoDB storage for scalable asset storage
+• Compression-aware storage for large text assets
+• Content hash deduplication
+• Intelligent search pipeline via Lambda
+• Streamlit interface for interactive exploration
 
-### 5. **Enhanced Duplicate Detection**
-- Smart duplicate checking during upload
-- Similarity threshold configuration
-- Visual comparison of duplicates
-- Option to proceed with similar uploads
+---
 
-### 6. **Hybrid Search with Filters**
-- Advanced filtering (language, tags, date, quality)
-- Reranking by quality + relevance
-- Minimum score thresholds
-- Multi-criteria search
+# 🧠 System Architecture
 
-### 7. **Collaborative Features**
-- Comments on assets
-- Star ratings (1-5 stars)
-- User feedback tracking
-- Average rating display
+Trinetra consists of multiple modular components:
 
-### 8. **Improved UX**
-- Live file preview before upload
-- File size and type information
-- Quality metrics in results
-- Side-by-side comparison tool
-- Search history with re-run capability
+### 1. Ingestion Layer
 
-### 9. **Export Options**
-- ZIP export (full registry backup)
-- JSON export (portable format)
-- Asset metadata included
-- Easy migration support
+Handles incoming assets.
 
-### 10. **Admin Dashboard**
-- User management
-- System statistics
-- Popular searches analytics
-- User activity tracking
+Supported modalities:
 
-### 11. **Enhanced Analytics**
-- Track searches by user
-- 7-day usage statistics
-- Average results and speed metrics
-- Query frequency analysis
+* Text
+* Image
+* Web content
 
-### 12. **Asset Metadata**
-- Uploader tracking
-- Quality scores
-- Upload timestamps
-- Collection grouping
-- Custom tags and descriptions
+Text assets are stored via an **AWS Lambda ingestion endpoint** and saved into **DynamoDB**.
 
-## 🚀 Installation
+---
 
-### Requirements
-- Python 3.8+
-- CUDA (optional, for GPU acceleration)
+### 2. Storage Layer
 
-### Setup
+**AWS DynamoDB**
 
-1. **Clone the repository**
+Each stored asset includes:
+
+* `asset_id`
+* `modality`
+* `content`
+* `encoding`
+* `content_hash`
+* `created_at`
+* `ttl`
+
+Large text payloads are automatically **compressed using zlib** before storage when beneficial.
+
+---
+
+### 3. Search Layer
+
+Search queries are handled by:
+
+**LambdaSearchClient**
+
+Responsibilities:
+
+* Query DynamoDB
+* Decode compressed content
+* Filter by modality
+* Return structured results
+
+---
+
+### 4. Web Intelligence Layer
+
+Uses **DuckDuckGo HTML search** and web scraping to collect information from public sources.
+
+Components:
+
+* WebSearchEngine
+* Page text extraction
+* Query expansion
+
+---
+
+### 5. Vision Intelligence Layer
+
+Powered by **AWS Rekognition**
+
+Capabilities:
+
+* Label detection
+* Text detection (OCR)
+* Face detection
+* Image-based web search queries
+
+---
+
+### 6. Interface Layer
+
+Built using **Streamlit**
+
+Provides:
+
+* Search UI
+* Image analysis tools
+* Web results
+* Multimodal results display
+
+---
+
+# ⚙ Installation
+
+Clone the repository
+
 ```bash
-git clone https://github.com/your-org/trinetra.git
-cd trinetra
+git clone https://github.com/yajatkataria08-a11y/Trinetra_AI.git
+cd Trinetra_AI
 ```
 
-2. **Install dependencies**
+Install dependencies
+
 ```bash
 pip install -r requirements.txt
 ```
 
-3. **Run the application**
+Run the application
+
 ```bash
-streamlit run TrinetraV5.0.py
+streamlit run app.py
 ```
-
-4. **Access the app**
-Open your browser and navigate to `http://localhost:8501`
-
-## 📋 User Roles
-
-### Admin
-- Full system access
-- User management
-- Export/import data
-- View analytics
-- Upload assets
-
-### Uploader
-- Upload assets
-- View registry
-- Search functionality
-- No user management
-
-### Viewer
-- Search functionality
-- View assets
-- Rate and comment
-- No upload capability
-
-### Guest
-- Read-only access
-- Basic search
-- No upload or admin features
-
-## 🎯 Key Features
-
-### Visual Search
-1. **Text Query**: Describe images in any language
-2. **Image Match**: Upload an image to find similar ones
-3. **Advanced Filters**: Language, tags, quality, date range
-
-### Acoustic Search
-1. **Description**: Describe sounds in natural language
-2. **Audio Sample**: Upload audio for similarity search
-3. **Multi-language**: Cross-lingual search support
-
-### Neural Auditor
-- Embedding visualization (2D/3D)
-- PCA-based dimensionality reduction
-- Asset manifest view
-- Cache statistics
-
-### Asset Management
-- Batch upload support
-- Automatic duplicate detection
-- Quality analysis
-- Collection organization
-- Tag-based categorization
-
-## 🔐 Security
-
-- Password hashing with SHA-256
-- Session-based authentication
-- Role-based access control
-- Secure file handling
-- Input sanitization
-
-## 📊 Architecture
-
-### Technology Stack
-- **Frontend**: Streamlit
-- **ML Models**: CLIP (OpenAI), CLAP (LAION)
-- **Vector DB**: FAISS (Facebook AI)
-- **Database**: SQLite
-- **Audio Processing**: Librosa
-- **Image Processing**: Pillow
-
-### Data Flow
-1. User uploads asset
-2. Quality analysis performed
-3. Neural embedding generated
-4. Duplicate check executed
-5. FAISS index updated
-6. Metadata stored in SQLite
-
-### File Structure
-```
-trinetra_registry/
-├── storage/          # Uploaded assets
-├── image/            # Image FAISS index
-├── audio/            # Audio FAISS index
-├── metadata.db       # Asset metadata
-├── analytics.db      # Usage analytics
-├── users.db          # User accounts
-└── logs/             # Application logs
-```
-
-## 🎨 Theming
-
-Trinetra V5.0 features a beautiful dual-theme system:
-
-### Dark Mode (Default)
-- Deep blue-black background
-- Golden accent colors
-- High contrast for readability
-
-### Light Mode
-- Clean white panels
-- Warm brown accents
-- Optimal for bright environments
-
-Toggle between themes using the sidebar.
-
-## 📈 Performance
-
-- **Search Speed**: ~45-100ms average
-- **Embedding Cache**: 1000 vectors cached
-- **Batch Upload**: Process multiple files efficiently
-- **GPU Support**: Automatic CUDA detection
-
-## 🌍 Multilingual Support
-
-Supported languages:
-- English (en)
-- Hindi (hi)
-- Tamil (ta)
-- Telugu (te)
-- Kannada (kn)
-- Malayalam (ml)
-- Bengali (bn)
-- Marathi (mr)
-- Gujarati (gu)
-- Punjabi (pa)
-
-Queries are automatically translated to English for embedding generation.
-
-## 📝 Usage Examples
-
-### Upload Single Asset
-1. Log in as admin/uploader
-2. Select modality (image/audio)
-3. Choose language
-4. Add tags (optional)
-5. Upload file
-6. Preview before registration
-7. Click "Register Asset"
-
-### Batch Upload
-1. Enable "Batch Upload Mode"
-2. Add tags for all files
-3. Set collection name
-4. Upload multiple files
-5. Review results
-6. Duplicates are automatically detected
-
-### Search for Assets
-1. Select "Visual Search" or "Acoustic Search"
-2. Choose input mode (text or file)
-3. Apply filters (optional)
-4. Execute search
-5. View results with quality scores
-6. Rate and comment on results
-
-### Compare Results
-1. After search, expand "Compare Results"
-2. Select two assets
-3. View side-by-side comparison
-4. See scores and metadata
-
-## 🔧 Configuration
-
-Edit `Config` class in the code to customize:
-
-```python
-class Config:
-    MAX_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
-    EMBEDDING_DIM = 512
-    AUDIO_DURATION_S = 7.0
-    CONFIDENCE_HIGH = 0.65
-    CONFIDENCE_MED = 0.45
-    DUPLICATE_THRESHOLD = 0.95
-    CACHE_SIZE = 1000
-```
-
-## 🐛 Troubleshooting
-
-### FAISS not found
-```bash
-pip install faiss-cpu --break-system-packages
-```
-
-### GPU not detected
-Check CUDA installation:
-```bash
-python -c "import torch; print(torch.cuda.is_available())"
-```
-
-### Models not downloading
-Ensure internet connection and sufficient disk space (~2GB).
-
-### Database locked
-Close other instances of the application.
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-## 📄 License
-
-This project is licensed under the MIT License.
-
-## 👥 Team
-
-**Created by Team Human**
-
-For questions or support, contact: team@trinetra.ai
-
-## 🙏 Acknowledgments
-
-- OpenAI for CLIP model
-- LAION for CLAP model
-- Facebook AI for FAISS
-- Streamlit team for the framework
-- Anthropic for Claude assistance
-
-## 📚 Documentation
-
-For detailed API documentation, see [DOCS.md](DOCS.md)
-
-## 🗺️ Roadmap
-
-### V6.0 (Planned)
-- [ ] Video asset support
-- [ ] Real-time collaboration
-- [ ] Advanced analytics dashboard
-- [ ] Mobile app
-- [ ] API endpoints
-- [ ] Asset versioning
-- [ ] Automated backups
-- [ ] Custom model training
-- [ ] Integration with cloud storage
-- [ ] Advanced security features
 
 ---
 
-**Version**: 5.0.0  
-**Last Updated**: 24/2/2026
-**Status**: Production Ready
+# 🔑 Configuration
+
+Create a `.streamlit/secrets.toml`
+
+Example:
+
+```toml
+LAMBDA_SEARCH_URL = "your_lambda_function_url"
+LAMBDA_INGEST_URL = "your_ingest_lambda_url"
+
+AWS_ACCESS_KEY_ID = "your_access_key"
+AWS_SECRET_ACCESS_KEY = "your_secret_key"
+AWS_REGION = "us-east-1"
+```
+
+Environment variables can also be used instead.
+
+---
+
+# 📦 Requirements
+
+Main dependencies:
+
+* streamlit
+* boto3
+* requests
+* beautifulsoup4
+* pillow
+* numpy
+
+Install using:
+
+```bash
+pip install -r requirements.txt
+```
+
+---
+
+# 🧪 Technologies Used
+
+* Python
+* AWS Lambda
+* AWS DynamoDB
+* AWS Rekognition
+* Streamlit
+* BeautifulSoup
+* REST APIs
+* Multimodal AI architecture
+
+---
+
+# 👨‍💻 Author
+
+**Yajat Kataria**
+
+Creator of the Trinetra AI system.
+
+Designed and implemented:
+
+* Core architecture
+* AI pipeline integration
+* Search engine
+* Web intelligence engine
+* Reverse image search
+* Lambda integrations
+* DynamoDB storage logic
+* Streamlit interface
+
+---
+
+# 🤝 Contributor
+
+**Aklesh Swain**
+
+Contribution:
+
+* AWS infrastructure pipeline setup
+* AWS service configuration support
+
+---
+
+# ⚠ Intellectual Property Notice
+
+Trinetra AI is an original project created by **Yajat Kataria**.
+
+The architecture, design, and system implementation are proprietary.
+
+This repository is published publicly **for demonstration and educational purposes only**.
+
+---
+
+# 📜 License
+
+**Trinetra AI © 2026 Yajat Kataria**
+
+All Rights Reserved.
+
+This codebase may not be copied, modified, distributed, or used in commercial systems without explicit permission from the author.
+
+Unauthorized use of this software or its architecture is prohibited.
+
+---
+
+# 🌌 Vision
+
+Trinetra represents a step toward **fully multimodal AI systems capable of perceiving and reasoning across different forms of data**.
+
+Future versions aim to expand into:
+
+* Audio intelligence
+* Video understanding
+* Autonomous AI agents
+* Hardware-integrated AI systems
+
+: Production Ready
+
 
 
