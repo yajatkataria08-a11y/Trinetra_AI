@@ -1,4 +1,9 @@
 # 👁️ Trinetra V5.0 - Multimodal Neural Registry
+[<image-card alt="Python" src="https://img.shields.io/badge/Python-3.8%2B-blue" ></image-card>](https://www.python.org/)
+[<image-card alt="Streamlit" src="https://img.shields.io/badge/Streamlit-1.0+-FF4B4B" ></image-card>](https://streamlit.io/)
+[<image-card alt="FAISS" src="https://img.shields.io/badge/FAISS-Facebook%20AI-green" ></image-card>](https://github.com/facebookresearch/faiss)
+[<image-card alt="License: MIT" src="https://img.shields.io/badge/License-MIT-yellow.svg" ></image-card>](https://opensource.org/licenses/MIT)
+[<image-card alt="Stars" src="https://img.shields.io/github/stars/yajatkataria08-a11y/Trinetra_AI?style=social" ></image-card>](https://github.com/yajatkataria08-a11y/Trinetra_AI)
 
 ## Overview
 Trinetra V5.0 is an advanced AI-powered multimodal asset registry system built for Bharat's digital infrastructure. It uses state-of-the-art neural embeddings (CLIP for images, CLAP for audio) with FAISS indexing for lightning-fast similarity search.
@@ -350,4 +355,5 @@ For detailed API documentation, see [DOCS.md](DOCS.md)
 **Version**: 5.0.0  
 **Last Updated**: 24/2/2026
 **Status**: Production Ready
+
 
