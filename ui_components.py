@@ -116,7 +116,10 @@ def build_css(theme: str) -> str:
   --shadow:   {tk["shadow_card"]};
 }}
 
-#MainMenu, header, footer {{ visibility: hidden !important; }}
+#MainMenu {{ visibility: hidden !important; }}
+footer {{ visibility: hidden !important; }}
+/* Keep header visible so sidebar toggle button works */
+header [data-testid="stToolbar"] {{ visibility: hidden !important; }}
 
 html, body,
 [data-testid="stAppViewContainer"],
