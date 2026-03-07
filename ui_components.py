@@ -598,8 +598,9 @@ h2, h3, h4 {{
 .theme-toggle-wrap [data-testid="stButton"] {{
   position: absolute;
   inset: 0;
-  opacity: 0;          /* invisible but clickable */
+  opacity: 0 !important;
   z-index: 10;
+  pointer-events: auto;
 }}
 .theme-toggle-wrap [data-testid="stButton"] button {{
   width: 100% !important;
@@ -607,6 +608,7 @@ h2, h3, h4 {{
   border: none !important;
   background: transparent !important;
   cursor: pointer !important;
+  opacity: 0 !important;
 }}
 
 /* ── Login page ── */
