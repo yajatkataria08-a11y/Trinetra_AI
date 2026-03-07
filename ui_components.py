@@ -351,7 +351,7 @@ h2, h3, h4 {{
 [data-testid="stDataFrame"] td {{
   font-family: 'JetBrains Mono', monospace !important;
   font-size: 0.78rem !important;
-  color: {tk["mono"]} !important;
+color: {tk["text_mono"]} !important;
   background: {tk["bg_card"]} !important;
 }}
 
