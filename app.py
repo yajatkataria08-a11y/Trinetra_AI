@@ -353,8 +353,7 @@ with st.sidebar:
       </div>
     </div>
     """, unsafe_allow_html=True)
-    if st.button("toggle_hidden", use_container_width=True, key="theme_btn",
-                 label_visibility="hidden"):
+    if st.button("toggle_hidden", use_container_width=True, key="theme_btn"):
         st.session_state.theme = "light" if not is_light else "dark"
         st.rerun()
 
