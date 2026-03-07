@@ -111,7 +111,42 @@ image_engine, audio_engine, analytics, web_search, \
 def show_enhanced_login_page(auth_manager):
     st.markdown("""
     <div class="login-container">
-        <div class="login-logo">👁️</div>
+        <div class="login-logo">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 80" width="96" height="64">
+              <defs>
+                <radialGradient id="lg" cx="50%" cy="50%" r="50%">
+                  <stop offset="0%" stop-color="#e8a020" stop-opacity="0.45"/>
+                  <stop offset="100%" stop-color="#e8a020" stop-opacity="0"/>
+                </radialGradient>
+                <linearGradient id="rg" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#ff6a00"/>
+                  <stop offset="45%" stop-color="#e8a020"/>
+                  <stop offset="100%" stop-color="#4e54c8"/>
+                </linearGradient>
+                <linearGradient id="tg" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#e8a020"/>
+                  <stop offset="100%" stop-color="#fff5d6"/>
+                </linearGradient>
+                <filter id="glow2">
+                  <feGaussianBlur stdDeviation="2.5" result="blur"/>
+                  <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+                </filter>
+              </defs>
+              <ellipse cx="60" cy="40" rx="52" ry="34" fill="url(#lg)"/>
+              <path d="M8,40 Q60,4 112,40 Q60,76 8,40Z" fill="#0d1321" stroke="url(#rg)" stroke-width="2.5" filter="url(#glow2)"/>
+              <circle cx="60" cy="40" r="18" fill="#0a0f1e" stroke="#e8a020" stroke-width="1.2"/>
+              <polygon points="60,24 75,50 45,50" fill="none" stroke="url(#tg)" stroke-width="1.8" filter="url(#glow2)"/>
+              <circle cx="60" cy="40" r="6" fill="none" stroke="#e8a020" stroke-width="1.4"/>
+              <text x="60" y="44" text-anchor="middle" fill="#e8a020" font-size="7" font-family="serif" font-weight="bold">©</text>
+              <rect x="4" y="34" width="3" height="12" rx="1" fill="#e8a020" opacity="0.7"/>
+              <rect x="1" y="36" width="2" height="3" rx="0.5" fill="#ff6a00" opacity="0.8"/>
+              <rect x="1" y="41" width="2" height="3" rx="0.5" fill="#ff6a00" opacity="0.8"/>
+              <rect x="103" y="37" width="2" height="6" rx="1" fill="#4e9ff5" opacity="0.9"/>
+              <rect x="107" y="33" width="2" height="14" rx="1" fill="#4e9ff5" opacity="0.9"/>
+              <rect x="111" y="36" width="2" height="8" rx="1" fill="#4e9ff5" opacity="0.7"/>
+              <rect x="115" y="38" width="2" height="4" rx="1" fill="#4e9ff5" opacity="0.5"/>
+            </svg>
+        </div>
         <div class="login-title">TRINETRA</div>
         <div class="login-subtitle">Multimodal Neural Registry</div>
     </div>
@@ -353,7 +388,8 @@ with st.sidebar:
       </div>
     </div>
     """, unsafe_allow_html=True)
-    if st.button("toggle_hidden", use_container_width=True, key="theme_btn"):
+    if st.button("toggle_hidden", use_container_width=True, key="theme_btn",
+                 label_visibility="hidden"):
         st.session_state.theme = "light" if not is_light else "dark"
         st.rerun()
 
