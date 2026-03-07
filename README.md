@@ -1,4 +1,4 @@
-🔱Trinetra AI — Multimodal Intelligence Engine
+#🔱Trinetra AI — Multimodal Intelligence Engine
 
 **Trinetra AI** is a multimodal AI system designed to analyze and search across **text, images, and web data** using modern AI infrastructure.
 
@@ -249,6 +249,7 @@ Future versions aim to expand into:
 * Hardware-integrated AI systems
 
 : Production Ready
+
 
 
 
