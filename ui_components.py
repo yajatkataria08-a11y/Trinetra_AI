@@ -118,8 +118,8 @@ def build_css(theme: str) -> str:
 
 #MainMenu {{ visibility: hidden !important; }}
 footer {{ visibility: hidden !important; }}
-/* Keep header visible so sidebar toggle button works */
-header [data-testid="stToolbar"] {{ visibility: hidden !important; }}
+[data-testid="stToolbar"] {{ visibility: hidden !important; }}
+[data-testid="stDecoration"] {{ display: none !important; }}
 
 html, body,
 [data-testid="stAppViewContainer"],
@@ -138,7 +138,7 @@ html, body,
   position: relative;
   z-index: 1;
 }}
-.block-container {{ padding-top: 0.5rem !important; }}
+.block-container {{ padding-top: 1rem !important; }}
 
 /* ── Empty container fix ── */
 [data-testid="stVerticalBlock"] > div:empty,
