@@ -1,15 +1,21 @@
 <div align="center">
 
 <img src="logo.png" alt="Trinetra Logo" width="400"/>
-</div>
+
 # TRINETRA V5.0
-## 🔱Trinetra AI — Multimodal Intelligence Engine
 
-**Trinetra AI** is a multimodal AI system designed to analyze and search across **text, images, and web data** using modern AI infrastructure.
+### Multimodal Neural Search Registry · AI for Bharat
 
-It combines **AWS services, multimodal embeddings, web intelligence, and AI pipelines** into a unified system capable of intelligent search and content analysis.
+[![MIT License](https://img.shields.io/badge/License-MIT-e8a020?style=flat-square)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.10+-4e9ff5?style=flat-square&logo=python&logoColor=white)](https://python.org)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.35+-ff4b4b?style=flat-square&logo=streamlit&logoColor=white)](https://streamlit.io)
+[![CLIP](https://img.shields.io/badge/CLIP-ViT--B/32-e8a020?style=flat-square)](https://github.com/openai/CLIP)
+[![CLAP](https://img.shields.io/badge/CLAP-HTSAT--Fused-4e54c8?style=flat-square)](https://github.com/LAION-AI/CLAP)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Streamlit%20Cloud-3dd68c?style=flat-square&logo=streamlit)](https://trinetra-ai-team-human.streamlit.app)
 
-The goal of Trinetra is to move toward **next-generation AI assistants that can understand multiple forms of information simultaneously**.
+*Search images and audio in Hindi, Tamil, Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi & English — powered by Sarvam AI*
+
+</div>.
 
 ---
 
@@ -254,6 +260,7 @@ Future versions aim to expand into:
 * Hardware-integrated AI systems
 
 : Production Ready
+
 
 
 
