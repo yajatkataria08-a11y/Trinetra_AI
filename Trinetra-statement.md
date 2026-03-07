@@ -1,4 +1,4 @@
-# Trinetra V5.0 — Problem Statement
+# Trinetra V6.0 — Problem Statement
 
 **Team:** Team Human
 **Members:** Yajat Kataria · Aklesh Swain
@@ -112,4 +112,5 @@ The immediate use case is cultural archiving and media management. The broader v
 ---
 
 *Trinetra V5.0 · March 2026 · Built for Bharat's Digital Future*
+
 
