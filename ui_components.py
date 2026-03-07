@@ -120,6 +120,16 @@ def build_css(theme: str) -> str:
 footer {{ visibility: hidden !important; }}
 [data-testid="stToolbar"] {{ visibility: hidden !important; }}
 [data-testid="stDecoration"] {{ display: none !important; }}
+/* Style header bar to match theme */
+header[data-testid="stHeader"] {{
+  background: {tk["bg_base"]} !important;
+  border-bottom: 1px solid {tk["border"]} !important;
+  height: 3rem !important;
+}}
+/* Keep only the sidebar toggle button visible */
+header[data-testid="stHeader"] button[kind="header"] {{
+  color: {tk["accent"]} !important;
+}}
 
 html, body,
 [data-testid="stAppViewContainer"],
@@ -138,7 +148,7 @@ html, body,
   position: relative;
   z-index: 1;
 }}
-.block-container {{ padding-top: 1rem !important; }}
+.block-container {{ padding-top: 3.5rem !important; }}
 
 /* ── Empty container fix ── */
 [data-testid="stVerticalBlock"] > div:empty,
