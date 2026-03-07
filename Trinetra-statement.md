@@ -1,7 +1,8 @@
 # Trinetra V6.0 — Problem Statement
 
 **Team:** Team Human
-**Members:** Yajat Kataria,Amber · Aklesh Swain
+**Team Leader** Aklesh Swain
+**Members:** Yajat Kataria· Amber · Aklesh Swain
 **Track:** AI for Bharat
 **Version:** 5.0 (March 2026)
 
@@ -112,6 +113,7 @@ The immediate use case is cultural archiving and media management. The broader v
 ---
 
 *Trinetra V5.0 · March 2026 · Built for Bharat's Digital Future*
+
 
 
 
