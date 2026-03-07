@@ -378,7 +378,7 @@ with st.sidebar:
         st.session_state.user          = None
         st.rerun()
 
-    # ── Working theme toggle: decorative pill + invisible real button overlaid ──
+    # ── Theme toggle: decorative pill + invisible real button overlaid ──
     st.markdown(f"""
     <div class="theme-toggle-wrap">
       <div class="theme-toggle-pill">
@@ -388,7 +388,7 @@ with st.sidebar:
       </div>
     </div>
     """, unsafe_allow_html=True)
-    if st.button("toggle_hidden", use_container_width=True, key="theme_btn"):
+    if st.button("​", use_container_width=True, key="theme_btn"):
         st.session_state.theme = "light" if not is_light else "dark"
         st.rerun()
 
