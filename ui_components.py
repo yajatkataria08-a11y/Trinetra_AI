@@ -280,6 +280,24 @@ h2, h3, h4 {{
 }}
 [data-testid="stButton"] button:hover::before {{ opacity: 1; }}
 
+/* ── Form submit button (Login) ── */
+[data-testid="stFormSubmitButton"] button {{
+  background: transparent !important;
+  border: 1px solid {tk["accent"]} !important;
+  color: {tk["accent"]} !important;
+  font-family: 'Syne', sans-serif !important;
+  font-weight: 700 !important;
+  border-radius: 7px !important;
+  letter-spacing: 0.03em !important;
+  transition: all 0.2s var(--ease) !important;
+}}
+[data-testid="stFormSubmitButton"] button:hover {{
+  background: {tk["accent"]} !important;
+  color: #080c14 !important;
+  transform: translateY(-2px) !important;
+  box-shadow: 0 0 18px {tk["accent_glow"]} !important;
+}}
+
 /* ── Inputs ── */
 [data-testid="stTextInput"] input {{
   background: {tk["bg_card"]} !important;
@@ -351,7 +369,7 @@ h2, h3, h4 {{
 [data-testid="stDataFrame"] td {{
   font-family: 'JetBrains Mono', monospace !important;
   font-size: 0.78rem !important;
-color: {tk["text_mono"]} !important;
+  color: {tk["text_mono"]} !important;
   background: {tk["bg_card"]} !important;
 }}
 
@@ -590,7 +608,9 @@ color: {tk["text_mono"]} !important;
   background: linear-gradient(90deg, transparent, {tk["accent"]}, transparent);
 }}
 .login-logo {{
-  text-align: center;
+  display: flex;
+  justify-content: center;
+  align-items: center;
   margin-bottom: 0.75rem;
   filter: drop-shadow(0 0 16px rgba(232,160,32,0.6));
 }}
