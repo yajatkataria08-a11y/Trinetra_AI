@@ -1,15 +1,46 @@
-streamlit
-faiss-cpu
-torch
-torchvision
-Pillow
-deep-translator
-transformers
-librosa
-numpy
-soundfile
-plotly
-scikit-learn
-pandas
-werkzeug
+# ============================================================
+#  Trinetra V5.0 — Python Dependencies
+#  Install: pip install -r requirements.txt
+#  Python: 3.10+
+# ============================================================
+
+# ── Core UI ──────────────────────────────────────────────────
+streamlit>=1.35.0
+
+# ── Neural Models (CLIP + CLAP) ──────────────────────────────
+torch>=2.1.0
+transformers>=4.40.0
+
+# ── Vector Search ────────────────────────────────────────────
+faiss-cpu>=1.8.0          # swap for faiss-gpu if on CUDA
+
+# ── Image Processing ─────────────────────────────────────────
+Pillow>=10.0.0
+
+# ── Audio Processing ─────────────────────────────────────────
+librosa>=0.10.1
+soundfile>=0.12.1          # librosa backend for non-wav formats
+
+# ── Web Search & HTTP ────────────────────────────────────────
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+
+# ── Translation ──────────────────────────────────────────────
+deep-translator>=1.11.4    # GoogleTranslator fallback
+
+# ── Auth & Security ──────────────────────────────────────────
+werkzeug>=3.0.1            # password hashing (pbkdf2:sha256)
+
+# ── Data & Visualisation ─────────────────────────────────────
+numpy>=1.26.0
+pandas>=2.1.0
+plotly>=5.20.0
+scikit-learn>=1.4.0        # KMeans + PCA for cluster tab
+
+# ── AWS (Rekognition) ────────────────────────────────────────
+boto3>=1.34.0
+botocore>=1.34.0
+
+# ── Misc stdlib extensions ───────────────────────────────────
+# sqlite3, hashlib, threading, smtplib — all stdlib, no install needed
 
