@@ -118,17 +118,25 @@ def build_css(theme: str) -> str:
 
 #MainMenu {{ visibility: hidden !important; }}
 footer {{ visibility: hidden !important; }}
-[data-testid="stToolbar"] {{ visibility: hidden !important; }}
 [data-testid="stDecoration"] {{ display: none !important; }}
+/* Hide toolbar icons but NOT the sidebar toggle */
+[data-testid="stToolbarActions"] {{ visibility: hidden !important; }}
 /* Style header bar to match theme */
 header[data-testid="stHeader"] {{
   background: {tk["bg_base"]} !important;
   border-bottom: 1px solid {tk["border"]} !important;
-  height: 3rem !important;
 }}
-/* Keep only the sidebar toggle button visible */
-header[data-testid="stHeader"] button[kind="header"] {{
+/* Sidebar collapse/expand button - make it visible and amber */
+[data-testid="stSidebarCollapsedControl"] {{
+  visibility: visible !important;
+  display: flex !important;
+  background: {tk["bg_card"]} !important;
+  border: 1px solid {tk["accent"]} !important;
+  border-radius: 0 8px 8px 0 !important;
+}}
+[data-testid="stSidebarCollapsedControl"] button {{
   color: {tk["accent"]} !important;
+  visibility: visible !important;
 }}
 
 html, body,
