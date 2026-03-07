@@ -1,8 +1,11 @@
+<h3 align="center">
+  <code>⫵───⟮ ◬ ⟯───≋</code>
+</h3>
 
-      ◢████◣
-   ◀██  ◉  ██▶
-      ◥████◤
-
+<p align="center">
+  <b>The All-Seeing Project</b><br>
+  <i>Synthesizing data through the geometric lens.</i>
+</p>
  Trinetra AI — Multimodal Intelligence Engine
 
 **Trinetra AI** is a multimodal AI system designed to analyze and search across **text, images, and web data** using modern AI infrastructure.
@@ -254,6 +257,7 @@ Future versions aim to expand into:
 * Hardware-integrated AI systems
 
 : Production Ready
+
 
 
 
