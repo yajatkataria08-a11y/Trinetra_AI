@@ -15,7 +15,7 @@
 
 *Search images and audio in Hindi, Tamil, Telugu, Kannada, Malayalam, Bengali, Marathi, Gujarati, Punjabi & English — powered by Sarvam AI*
 
-</div>.
+</div>
 
 ---
 
@@ -260,6 +260,7 @@ Future versions aim to expand into:
 * Hardware-integrated AI systems
 
 : Production Ready
+
 
 
 
