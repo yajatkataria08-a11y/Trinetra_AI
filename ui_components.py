@@ -554,7 +554,6 @@ h2, h3, h4 {{
   border: 1px solid {tk["border"]};
   border-radius: 50px;
   padding: 7px 14px;
-  margin-bottom: 0.5rem;
   user-select: none;
   pointer-events: none;  /* clicks go to the real button underneath */
 }}
@@ -590,25 +589,47 @@ h2, h3, h4 {{
 }}
 .tt-icon {{ font-size: 0.95rem; line-height: 1; }}
 
-/* Stack toggle pill + button so they visually overlap */
-.theme-toggle-wrap {{
-  position: relative;
-  margin-bottom: 0.75rem;
+/* ── Checkboxes ── */
+[data-testid="stCheckbox"] > label > div:first-child {{
+  background: {tk["bg_card"]} !important;
+  border: 2px solid {tk["accent"]} !important;
+  border-radius: 4px !important;
 }}
-.theme-toggle-wrap [data-testid="stButton"] {{
-  position: absolute;
-  inset: 0;
-  opacity: 0 !important;
-  z-index: 10;
-  pointer-events: auto;
+[data-testid="stCheckbox"] svg {{
+  color: #080c14 !important;
+  fill: #080c14 !important;
 }}
-.theme-toggle-wrap [data-testid="stButton"] button {{
-  width: 100% !important;
-  height: 100% !important;
-  border: none !important;
+
+/* ── Radio buttons ── */
+[data-testid="stRadio"] label p {{
+  color: {tk["text_primary"]} !important;
+}}
+
+/* ── Delete/trash buttons in admin panel ── */
+[data-testid="stButton"] button[kind="secondary"] {{
   background: transparent !important;
-  cursor: pointer !important;
-  opacity: 0 !important;
+}}
+
+/* ── Popovers (delete confirm) ── */
+[data-testid="stPopover"] > div,
+[data-testid="stPopoverBody"] {{
+  background: {tk["bg_card"]} !important;
+  border: 1px solid {tk["border"]} !important;
+  color: {tk["text_primary"]} !important;
+}}
+/* Popover trigger button (🗑️ Delete) */
+[data-testid="stPopover"] button {{
+  background: transparent !important;
+  border: 1px solid {tk["border"]} !important;
+  color: {tk["text_primary"]} !important;
+}}
+[data-testid="stPopover"] button:hover {{
+  border-color: #cc3333 !important;
+  color: #cc3333 !important;
+}}
+/* Promote button */
+[data-testid="stButton"] button:has(span) {{
+  background: transparent !important;
 }}
 
 /* ── Login page ── */
