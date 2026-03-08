@@ -546,6 +546,46 @@ h2, h3, h4 {{
 
 /* ── Theme toggle — WORKING FUNCTIONAL TOGGLE ── */
 /* The actual toggle is a Streamlit button; this styles the decorative pill shown above it */
+/* ── Theme toggle ── */
+.theme-toggle-wrap {{
+  position: relative;
+  margin-bottom: 0.5rem;
+}}
+/* Pull the real button up to sit exactly over the pill */
+.theme-toggle-wrap + div[data-testid="stButton"] {{
+  margin-top: -2.85rem !important;
+  position: relative;
+  z-index: 2;
+}}
+.theme-toggle-wrap + div[data-testid="stButton"] button {{
+  background: transparent !important;
+  border: 1px solid {tk["accent"]} !important;
+  border-radius: 50px !important;
+  box-shadow: none !important;
+  outline: none !important;
+  color: transparent !important;
+  height: 2.6rem !important;
+  cursor: pointer !important;
+}}
+.theme-toggle-wrap + div[data-testid="stButton"] button:hover,
+.theme-toggle-wrap + div[data-testid="stButton"] button:focus,
+.theme-toggle-wrap + div[data-testid="stButton"] button:active {{
+  background: transparent !important;
+  border: 1px solid {tk["accent"]} !important;
+  box-shadow: none !important;
+  transform: none !important;
+}}
+
+.theme-toggle-pill {{
+  margin-top: -2.8rem !important;
+}}
+.theme-toggle-pill + * div[data-testid="stButton"] button,
+div[data-testid="stButton"]:has(~ .theme-toggle-pill) button {{
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+}}
+
 .theme-toggle-pill {{
   display: flex;
   align-items: center;
