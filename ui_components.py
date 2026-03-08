@@ -553,25 +553,26 @@ h2, h3, h4 {{
 }}
 /* Pull the real button up to sit exactly over the pill */
 .theme-toggle-wrap + div[data-testid="stButton"] {{
-  margin-top: -2.85rem !important;
+  margin-top: -2.35rem !important;
   position: relative;
   z-index: 2;
 }}
 .theme-toggle-wrap + div[data-testid="stButton"] button {{
   background: transparent !important;
-  border: 1px solid {tk["accent"]} !important;
+  border: none !important;
   border-radius: 50px !important;
   box-shadow: none !important;
   outline: none !important;
   color: transparent !important;
-  height: 2.6rem !important;
+  height: 2.35rem !important;
   cursor: pointer !important;
+  padding: 0 !important;
 }}
 .theme-toggle-wrap + div[data-testid="stButton"] button:hover,
 .theme-toggle-wrap + div[data-testid="stButton"] button:focus,
 .theme-toggle-wrap + div[data-testid="stButton"] button:active {{
   background: transparent !important;
-  border: 1px solid {tk["accent"]} !important;
+  border: none !important;
   box-shadow: none !important;
   transform: none !important;
 }}
@@ -591,7 +592,7 @@ div[data-testid="stButton"]:has(~ .theme-toggle-pill) button {{
   align-items: center;
   gap: 10px;
   background: {tk["bg_card"]};
-  border: 1px solid {tk["border"]};
+  border: 1.5px solid {tk["accent"]};
   border-radius: 50px;
   padding: 7px 14px;
   user-select: none;
