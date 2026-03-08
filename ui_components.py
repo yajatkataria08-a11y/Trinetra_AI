@@ -302,9 +302,15 @@ h2, h3, h4 {{
 [data-testid="stButton"] button:hover::before {{ opacity: 1; }}
 
 
-/* ── Theme toggle button ── */
+/* ── Theme toggle button — liquid fill left→right ── */
 [data-testid="stSidebar"] div[data-testid="stButton"]:nth-child(2) button {{
-  background: {tk["bg_card"]} !important;
+  background: linear-gradient(
+    to right,
+    {tk["accent"]} 0%,
+    {tk["accent"]} var(--fill, 0%),
+    {tk["bg_card"]} var(--fill, 0%),
+    {tk["bg_card"]} 100%
+  ) !important;
   border: 1.5px solid {tk["accent"]} !important;
   border-radius: 50px !important;
   color: {tk["accent"]} !important;
@@ -314,11 +320,32 @@ h2, h3, h4 {{
   letter-spacing: 0.08em !important;
   text-transform: uppercase !important;
   padding: 6px 14px !important;
+  position: relative !important;
+  overflow: hidden !important;
+  transition: background 0s, color 0.3s !important;
+}}
+[data-testid="stSidebar"] div[data-testid="stButton"]:nth-child(2) button::before {{
+  content: '' !important;
+  position: absolute !important;
+  inset: 0 !important;
+  background: {tk["accent"]} !important;
+  transform: translateX(-101%) !important;
+  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  border-radius: 50px !important;
+  z-index: 0 !important;
+}}
+[data-testid="stSidebar"] div[data-testid="stButton"]:nth-child(2) button:hover::before {{
+  transform: translateX(0%) !important;
 }}
 [data-testid="stSidebar"] div[data-testid="stButton"]:nth-child(2) button:hover {{
-  background: {tk["accent_glow"]} !important;
+  color: #080c14 !important;
   transform: none !important;
-  box-shadow: none !important;
+  box-shadow: 0 0 16px {tk["accent_glow"]} !important;
+}}
+[data-testid="stSidebar"] div[data-testid="stButton"]:nth-child(2) button > div,
+[data-testid="stSidebar"] div[data-testid="stButton"]:nth-child(2) button p {{
+  position: relative !important;
+  z-index: 1 !important;
 }}
 
 /* ── Form submit button (Login) ── */
