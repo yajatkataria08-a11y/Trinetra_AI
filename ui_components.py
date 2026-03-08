@@ -330,7 +330,7 @@ h2, h3, h4 {{
   inset: 0 !important;
   background: {tk["accent"]} !important;
   transform: translateX(-101%) !important;
-  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transition: transform 0.5s cubic-bezier(0.76, 0, 0.24, 1) !important;
   border-radius: 50px !important;
   z-index: 0 !important;
 }}
@@ -592,18 +592,35 @@ h2, h3, h4 {{
 }}
 
 /* ── Checkboxes ── */
-[data-testid="stCheckbox"] > label > div:first-child {{
-  background: {tk["bg_card"]} !important;
+[data-testid="stCheckbox"] span[data-baseweb="checkbox"] {{
+  background-color: {tk["bg_card"]} !important;
   border: 2px solid {tk["accent"]} !important;
   border-radius: 4px !important;
 }}
+[data-testid="stCheckbox"] input:checked ~ span[data-baseweb="checkbox"],
+[data-testid="stCheckbox"] span[data-checked="true"] {{
+  background-color: {tk["accent"]} !important;
+  border-color: {tk["accent"]} !important;
+}}
 [data-testid="stCheckbox"] svg {{
-  color: #080c14 !important;
-  fill: #080c14 !important;
+  fill: {"#080c14" if is_dark else "#ffffff"} !important;
+}}
+[data-testid="stCheckbox"] label span:last-child {{
+  color: {tk["text_primary"]} !important;
 }}
 
 /* ── Radio buttons ── */
-[data-testid="stRadio"] label p {{
+[data-testid="stRadio"] div[data-baseweb="radio"] {{
+  background-color: {tk["bg_card"]} !important;
+  border: 2px solid {tk["accent"]} !important;
+}}
+[data-testid="stRadio"] input:checked ~ div[data-baseweb="radio"] {{
+  background-color: {tk["accent"]} !important;
+  border-color: {tk["accent"]} !important;
+  box-shadow: 0 0 0 3px {tk["accent_glow"]} !important;
+}}
+[data-testid="stRadio"] label p,
+[data-testid="stRadio"] label span {{
   color: {tk["text_primary"]} !important;
 }}
 
