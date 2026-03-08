@@ -378,17 +378,13 @@ with st.sidebar:
         st.session_state.user          = None
         st.rerun()
 
-    # ── Theme toggle: pill is clickable via stButton wrapper trick ──
-    st.markdown(f"""
-    <div class="theme-toggle-wrap">
-      <div class="theme-toggle-pill">
-        <div class="tt-track"><div class="tt-knob"></div></div>
-        <span class="tt-icon">{"🌙" if not is_light else "☀️"}</span>
-        <span class="tt-label">{"Light Mode" if not is_light else "Dark Mode"}</span>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-    if st.button("​", use_container_width=True, key="theme_btn"):
+    # ── Theme toggle: plain styled button, no overlay tricks ──
+    knob_pos = "22px" if not is_light else "3px"
+    track_bg = T["accent"] if not is_light else T["border"]
+    knob_col = "#fff5d6" if not is_light else T["accent"]
+    icon = "🌙" if not is_light else "☀️"
+    label = "Light Mode" if not is_light else "Dark Mode"
+    if st.button(f"{icon}  {label}", use_container_width=True, key="theme_btn"):
         st.session_state.theme = "light" if not is_light else "dark"
         st.rerun()
 
