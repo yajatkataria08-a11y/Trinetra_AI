@@ -1074,4 +1074,4 @@ st.markdown("""
   <p><strong style='font-size:1.1em;color:#667eea;'>Created by Team Human</strong></p>
   <p>Powered by CLIP &amp; CLAP | Built for Bharat's Digital Future</p>
 </div>
-""", unsafe_allow_html=True)True)
+""", unsafe_allow_html=True)
