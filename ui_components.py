@@ -301,6 +301,26 @@ h2, h3, h4 {{
 }}
 [data-testid="stButton"] button:hover::before {{ opacity: 1; }}
 
+
+/* ── Theme toggle button ── */
+[data-testid="stSidebar"] div[data-testid="stButton"]:nth-child(2) button {{
+  background: {tk["bg_card"]} !important;
+  border: 1.5px solid {tk["accent"]} !important;
+  border-radius: 50px !important;
+  color: {tk["accent"]} !important;
+  font-family: 'JetBrains Mono', monospace !important;
+  font-size: 0.75rem !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.08em !important;
+  text-transform: uppercase !important;
+  padding: 6px 14px !important;
+}}
+[data-testid="stSidebar"] div[data-testid="stButton"]:nth-child(2) button:hover {{
+  background: {tk["accent_glow"]} !important;
+  transform: none !important;
+  box-shadow: none !important;
+}}
+
 /* ── Form submit button (Login) ── */
 [data-testid="stFormSubmitButton"] button {{
   background: transparent !important;
@@ -543,92 +563,6 @@ h2, h3, h4 {{
   color: {tk["accent"]};
   font-weight: 600;
 }}
-
-/* ── Theme toggle — WORKING FUNCTIONAL TOGGLE ── */
-/* The actual toggle is a Streamlit button; this styles the decorative pill shown above it */
-/* ── Theme toggle ── */
-.theme-toggle-wrap {{
-  position: relative;
-  margin-bottom: 0.5rem;
-}}
-/* Pull the real button up to sit exactly over the pill */
-.theme-toggle-wrap + div[data-testid="stButton"] {{
-  margin-top: -2.35rem !important;
-  position: relative;
-  z-index: 2;
-}}
-.theme-toggle-wrap + div[data-testid="stButton"] button {{
-  background: transparent !important;
-  border: none !important;
-  border-radius: 50px !important;
-  box-shadow: none !important;
-  outline: none !important;
-  color: transparent !important;
-  height: 2.35rem !important;
-  cursor: pointer !important;
-  padding: 0 !important;
-}}
-.theme-toggle-wrap + div[data-testid="stButton"] button:hover,
-.theme-toggle-wrap + div[data-testid="stButton"] button:focus,
-.theme-toggle-wrap + div[data-testid="stButton"] button:active {{
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-  transform: none !important;
-}}
-
-.theme-toggle-pill {{
-  margin-top: -2.8rem !important;
-}}
-.theme-toggle-pill + * div[data-testid="stButton"] button,
-div[data-testid="stButton"]:has(~ .theme-toggle-pill) button {{
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
-}}
-
-.theme-toggle-pill {{
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: {tk["bg_card"]};
-  border: 1.5px solid {tk["accent"]};
-  border-radius: 50px;
-  padding: 7px 14px;
-  user-select: none;
-  pointer-events: none;  /* clicks go to the real button underneath */
-}}
-.tt-track {{
-  position: relative;
-  width: 42px;
-  height: 22px;
-  border-radius: 11px;
-  background: {"#e8a020" if is_dark else tk["border"]};
-  transition: background 0.35s var(--ease);
-  flex-shrink: 0;
-  box-shadow: {"inset 0 0 8px rgba(232,160,32,0.4)" if is_dark else "none"};
-}}
-.tt-knob {{
-  position: absolute;
-  top: 3px;
-  left: {"22px" if is_dark else "3px"};
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: {"#fff5d6" if is_dark else "#b87818"};
-  box-shadow: 0 1px 4px rgba(0,0,0,0.3);
-  transition: left 0.35s cubic-bezier(0.68,-0.55,0.265,1.55);
-}}
-.tt-label {{
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 0.68rem;
-  font-weight: 600;
-  color: {tk["accent"]};
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  flex: 1;
-}}
-.tt-icon {{ font-size: 0.95rem; line-height: 1; }}
 
 /* ── Checkboxes ── */
 [data-testid="stCheckbox"] > label > div:first-child {{
