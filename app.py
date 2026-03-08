@@ -31,6 +31,7 @@ from auth import AuthManagerWithOTP
 from analytics import AnalyticsTracker
 from engines import ImageEngine, AudioEngine
 from search import WebSearchEngine, LambdaSearchClient, AWSReverseSearchEngine
+from titan_embeddings import get_titan_embedder
 from ui_components import (
     DARK, LIGHT, get_theme, build_css, TRINETRA_LOGO_SVG,
     display_results, render_enrichment_ui, render_aws_reverse_search_tab,
@@ -854,6 +855,26 @@ with tab_web:
 # ── AWS Reverse Search ─────────────────────────────────────────────────────────
 with tab_aws:
     render_aws_reverse_search_tab(T, aws_search, web_search)
+
+    # ── Titan Embeddings V2 status ──
+    st.markdown("---")
+    st.markdown("### 🧠 Amazon Titan Embeddings V2")
+    titan = get_titan_embedder()
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        if titan.is_available():
+            st.success("✅ Titan Text Embeddings V2 active — powering query encoding")
+            st.caption("Model: `amazon.titan-embed-text-v2:0` · dim=512 · ~$0.00002/1K tokens")
+        else:
+            st.warning(f"⚠️ Titan unavailable: {titan.error()} — using CLIP/CLAP fallback")
+    with c2:
+        if st.button("🔌 Test Titan", use_container_width=True):
+            with st.spinner("Testing..."):
+                ok, msg = titan.test_connection()
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
 
 
 # ── Clusters ───────────────────────────────────────────────────────────────────
