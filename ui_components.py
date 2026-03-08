@@ -330,7 +330,7 @@ h2, h3, h4 {{
   inset: 0 !important;
   background: {tk["accent"]} !important;
   transform: translateX(-101%) !important;
-  transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transition: transform 0.5s cubic-bezier(0.4, 0, 0.2, 1) !important;
   border-radius: 50px !important;
   z-index: 0 !important;
 }}
