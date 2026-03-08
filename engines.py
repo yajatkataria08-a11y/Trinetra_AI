@@ -21,6 +21,7 @@ from utils import (
     is_audio_valid, file_md5, fp16,
 )
 from models import load_models
+from titan_embeddings import get_titan_embedder
 
 logger = logging.getLogger("Trinetra")
 
@@ -331,6 +332,15 @@ class ImageEngine(TrinetraEngine):
         super().__init__("image")
 
     def _compute_embedding(self, file_path=None, text=None):
+        # ── Text query: try Titan V2 first, fall back to CLIP text encoder ──
+        if text:
+            titan = get_titan_embedder()
+            if titan.is_available():
+                vec = titan.embed(text)
+                if vec is not None:
+                    return self._normalize(vec)
+                logger.warning("Titan embed returned None — falling back to CLIP")
+
         clip_model, clip_processor, _, _ = load_models()
         with _inference_lock:
             with torch.no_grad():
@@ -361,6 +371,15 @@ class AudioEngine(TrinetraEngine):
         super().__init__("audio")
 
     def _compute_embedding(self, file_path=None, text=None):
+        # ── Text query: try Titan V2 first, fall back to CLAP text encoder ──
+        if text:
+            titan = get_titan_embedder()
+            if titan.is_available():
+                vec = titan.embed(text)
+                if vec is not None:
+                    return self._normalize(vec)
+                logger.warning("Titan embed returned None — falling back to CLAP")
+
         _, _, clap_model, clap_processor = load_models()
         with _inference_lock:
             with torch.no_grad():
