@@ -378,17 +378,19 @@ with st.sidebar:
         st.session_state.user          = None
         st.rerun()
 
-    # ── Theme toggle: button rendered first, pill overlaid via negative margin ──
+    # ── Theme toggle: pill is clickable via stButton wrapper trick ──
+    st.markdown(f"""
+    <div class="theme-toggle-wrap">
+      <div class="theme-toggle-pill">
+        <div class="tt-track"><div class="tt-knob"></div></div>
+        <span class="tt-icon">{"🌙" if not is_light else "☀️"}</span>
+        <span class="tt-label">{"Light Mode" if not is_light else "Dark Mode"}</span>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
     if st.button("​", use_container_width=True, key="theme_btn"):
         st.session_state.theme = "light" if not is_light else "dark"
         st.rerun()
-    st.markdown(f"""
-    <div class="theme-toggle-pill" style="margin-top:-2.8rem;pointer-events:none;position:relative;z-index:1;">
-      <div class="tt-track"><div class="tt-knob"></div></div>
-      <span class="tt-icon">{"🌙" if not is_light else "☀️"}</span>
-      <span class="tt-label">{"Light Mode" if not is_light else "Dark Mode"}</span>
-    </div>
-    """, unsafe_allow_html=True)
 
     st.markdown(f'<hr style="border-color:{T["border"]};margin:1rem 0">', unsafe_allow_html=True)
 
