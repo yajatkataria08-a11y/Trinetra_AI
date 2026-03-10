@@ -98,40 +98,47 @@ class TitanEmbedder:
     def embed(self, text: str) -> np.ndarray | None:
         """
         Returns a normalised float32 numpy array of shape (512,),
-        or None on failure.
+        or None on failure. Retries on ThrottlingException with backoff.
         """
         if not self._ready:
             logger.warning(f"TitanEmbedder not ready: {self._err}")
             return None
 
-        try:
-            body = json.dumps({
-                "inputText":      text,
-                "dimensions":     TITAN_DIM,
-                "normalize":      True,       # unit-norm — matches CLIP/CLAP convention
-            })
-            response = self._client.invoke_model(
-                modelId     = TITAN_MODEL_ID,
-                body        = body,
-                contentType = "application/json",
-                accept      = "application/json",
-            )
-            result = json.loads(response["body"].read())
-            vec    = np.array(result["embedding"], dtype="float32")
+        import time as _time
+        body = json.dumps({
+            "inputText":  text,
+            "dimensions": TITAN_DIM,
+            "normalize":  True,
+        })
 
-            # Safety: re-normalise just in case
-            norm = np.linalg.norm(vec)
-            if norm > 1e-9:
-                vec = vec / norm
+        for attempt in range(4):
+            try:
+                resp   = self._client.invoke_model(
+                    modelId     = TITAN_MODEL_ID,
+                    body        = body,
+                    contentType = "application/json",
+                    accept      = "application/json",
+                )
+                result = json.loads(resp["body"].read())
+                vec    = np.array(result["embedding"], dtype="float32")
+                norm   = np.linalg.norm(vec)
+                if norm > 1e-9:
+                    vec = vec / norm
+                logger.debug(f"TitanEmbedder ok dim={vec.shape[0]} attempt={attempt+1}")
+                return vec
 
-            logger.debug(f"TitanEmbedder embedded {len(text)} chars → dim={vec.shape[0]}")
-            return vec
+            except Exception as e:
+                err = str(e)
+                if "ThrottlingException" in err or "TooManyRequests" in err:
+                    wait = (2 ** attempt) * 2   # 2s, 4s, 8s, 16s
+                    logger.warning(f"Titan throttled, retrying in {wait}s (attempt {attempt+1})")
+                    _time.sleep(wait)
+                    continue
+                logger.error(f"Titan embed failed: {type(e).__name__}: {e}", exc_info=True)
+                return None
 
-        except Exception as e:
-            import streamlit as st
-            st.error(f"❌ Titan embed error: {type(e).__name__}: {e}")
-            logger.error(f"Titan embed failed: {type(e).__name__}: {e}", exc_info=True)
-            return None
+        logger.error("Titan embed failed after 4 retries — throttle limit")
+        return None
 
     def embed_batch(self, texts: list[str]) -> list[np.ndarray | None]:
         """Embed a list of texts. Titan V2 is single-input; we loop."""
@@ -147,13 +154,6 @@ class TitanEmbedder:
         if vec.shape[0] != TITAN_DIM:
             return False, f"❌ Unexpected dim: {vec.shape[0]}"
         return True, f"✅ Titan Embeddings V2 connected! dim={TITAN_DIM}"
-
-
-# ── Module-level singleton (cached by Streamlit) ──────────────────
-
-@st.cache_resource(show_spinner=False)
-def get_titan_embedder() -> TitanEmbedder:
-    return TitanEmbedder()
 
 
 # ── Module-level singleton (cached by Streamlit) ──────────────────
