@@ -32,6 +32,7 @@ logger = logging.getLogger("Trinetra")
 # Titan V2 output dimensions — we use 512 to match CLIP/CLAP FAISS index
 TITAN_MODEL_ID  = "amazon.titan-embed-text-v2:0"
 TITAN_DIM       = 512          # request 512-dim output (Titan V2 supports 256/512/1024)
+TITAN_MODEL_ALT = "amazon.titan-embed-text-v2:0"  # fallback
 
 
 class TitanEmbedder:
@@ -127,7 +128,9 @@ class TitanEmbedder:
             return vec
 
         except Exception as e:
-            logger.error(f"Titan embed failed: {e}", exc_info=True)
+            import streamlit as st
+            st.error(f"❌ Titan embed error: {type(e).__name__}: {e}")
+            logger.error(f"Titan embed failed: {type(e).__name__}: {e}", exc_info=True)
             return None
 
     def embed_batch(self, texts: list[str]) -> list[np.ndarray | None]:
@@ -144,6 +147,13 @@ class TitanEmbedder:
         if vec.shape[0] != TITAN_DIM:
             return False, f"❌ Unexpected dim: {vec.shape[0]}"
         return True, f"✅ Titan Embeddings V2 connected! dim={TITAN_DIM}"
+
+
+# ── Module-level singleton (cached by Streamlit) ──────────────────
+
+@st.cache_resource(show_spinner=False)
+def get_titan_embedder() -> TitanEmbedder:
+    return TitanEmbedder()
 
 
 # ── Module-level singleton (cached by Streamlit) ──────────────────
